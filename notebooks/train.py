@@ -12,9 +12,9 @@ from datamodules.datasets import MultiModalDataset, DataCoupling, data_coupling_
 from model.multimodal_bridge_matching import MarkovJumpBridge
 
 ###############################################################################
-num_jets = 200_000
+num_jets = 300_000
 batch_size = 256
-max_epochs = 200
+max_epochs = 1000
 logger = CometLogger(api_key='8ONjCXJ1ogsqG1UxQzKxYn7tz', 
                      project_name='jet_sequences',
                      workspace='dfaroughy', 
@@ -37,8 +37,8 @@ dataset = MultiModalDataset(data)
 
 train_size = int(0.8 * len(dataset))
 val_size   = len(dataset) - train_size
-
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_coupling_collate_fn)
 val_dataloader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, collate_fn=data_coupling_collate_fn)
 
@@ -51,8 +51,8 @@ mjb = MarkovJumpBridge(gamma=0.075,
                        max_epochs=max_epochs,
                        time_eps=1e-5,
                        n_embd=256,
-                       n_layer=4,
-                       n_head=4,
+                       n_layer=2,
+                       n_head=2,
                        activation_function='gelu_new',
                        )
 

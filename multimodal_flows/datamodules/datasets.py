@@ -77,7 +77,7 @@ class MultiModalDataset(Dataset):
             if self.data.target.has_discrete or self.data.target.has_continuous:
                 self.attribute.append("target_mask")
                 self.target_mask = self.data.target.mask
-                self.len = len(self.data.source)
+                self.len = len(self.data.target)
 
         # ...context (optional) TODO!!!
 

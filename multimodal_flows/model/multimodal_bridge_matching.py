@@ -103,6 +103,7 @@ class MarkovJumpBridge(L.LightningModule):
                  prog_bar=True,
                  logger=True,
                  sync_dist=True,
+                 batch_size=len(batch)
                  )
 
         return {"loss": loss}
@@ -124,6 +125,7 @@ class MarkovJumpBridge(L.LightningModule):
                  prog_bar=True,
                  logger=True,
                  sync_dist=True,
+                 batch_size=len(batch)
                  )
 
         return {"val_loss": loss}
