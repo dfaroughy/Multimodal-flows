@@ -1,8 +1,0 @@
-gamma: 0.075
-lr: 0.001
-lr_final: 0.0001
-max_epochs: 100
-max_num_particles: 150
-num_jets: 30000
-time_eps: 1.0e-05
-vocab_size: 9
