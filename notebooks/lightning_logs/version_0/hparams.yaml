@@ -1,0 +1,13 @@
+activation_function: gelu_new
+gamma: 0.075
+lr: 0.001
+lr_final: 0.0001
+max_epochs: 1000
+max_num_particles: 150
+n_embd: 256
+n_head: 2
+n_layer: 2
+num_jets: 300000
+num_timesteps: 1000
+time_eps: 1.0e-05
+vocab_size: 9
