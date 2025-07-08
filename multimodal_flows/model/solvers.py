@@ -61,7 +61,7 @@ class DiscreteSolver:
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        logits = self.model(state, batch=None).logits         
+        logits = self.model(state)        
         rates = self.model.bridge_discrete.rate(state, logits)
 
         state.discrete = state.discrete.squeeze(-1)
@@ -74,9 +74,9 @@ class DiscreteSolver:
         state.discrete = (state.discrete + net_jumps * jump_mask) % self.vocab_size
         state.discrete = state.discrete.unsqueeze(-1)
 
-        # if last_step:
-        #     max_rate = torch.max(rates, dim=2)[1]
-        #     state.discrete = max_rate.unsqueeze(-1)
+        if last_step:
+            max_rate = torch.max(rates, dim=2)[1]
+            state.discrete = max_rate.unsqueeze(-1)
 
         return state
 

@@ -34,37 +34,37 @@ class ParticleTransformer(GPT2LMHeadModel):
     def __init__(self, config: GPT2Config, max_time_freq: float = 10.0):
         super().__init__(config)
 
-        # remove the causal mask from HF Transformer:
-
+        # remove the causal mask from Transformer
         for block in self.transformer.h:
             block.attn.bias.data.fill_(1)
 
-        self.time_embedding = TimeFourierEmbedding(config.n_embd, max_freq=max_time_freq)
-        self.target_embedding = nn.Embedding(config.vocab_size, config.n_embd)  # k_1
+        self.time_emb = TimeFourierEmbedding(config.n_embd, max_freq=max_time_freq)
+
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,   # noisy tokens (k_t)
-        labels: torch.LongTensor = None,      # clean target tokens (k_1)
-        time: torch.Tensor = None,
+        input_ids: torch.LongTensor = None,
+        time: torch.Tensor        = None,
         attention_mask: torch.LongTensor = None,
+        labels: torch.LongTensor = None,
         **kwargs
     ):
         """
         Accepts:
-          - input_ids             (B, D)
-          - time                  (B,) or (B,1) with values in [0,1]
-          - attention_mask        (B, D)
-          - target labels         (B, D)
+          - input_ids      (B, seq_len)
+          - time           (B,) or (B,1) with values in [0,1]
+          - attention_mask (B, seq_len)
+          - labels         (B, seq_len), if doing LM training
         """
-
-        inputs_emb = self.transformer.wte(input_ids)  # (B, D, hdim)
-        target_emb = self.target_embedding(labels) if labels else torch.zeros_like(inputs_emb)  # (B, D, hdim)
-        time_emb = self.time_embedding(time)                            # (B, hdim)
-        time_emb = time_emb.unsqueeze(1).expand(*inputs_emb.size())     # (B, D, hdim)
+        inputs_embeds = self.transformer.wte(input_ids)  # (B, seq, D)
+        t_emb = self.time_emb(time)                      # (B, D)
+        B, seq, D = inputs_embeds.size()
+        t_emb = t_emb.unsqueeze(1).expand(B, seq, D)     # (B, seq, D)
+        inputs_embeds = inputs_embeds + t_emb
         
+
         return super().forward(
-            inputs_embeds=inputs_emb + time_emb + target_emb, 
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             labels=labels,
             **kwargs,

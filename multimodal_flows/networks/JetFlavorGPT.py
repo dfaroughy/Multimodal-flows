@@ -1,3 +1,10 @@
+import math
+import inspect
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+from dataclasses import dataclass
+
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -7,17 +14,10 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-import math
-import inspect
-from dataclasses import dataclass
-
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
-
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False
+    """
     def __init__(self, ndim, bias):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
@@ -27,7 +27,6 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 class SelfAttention(nn.Module):
-
     def __init__(self, config):
         super().__init__()
 
@@ -75,13 +74,10 @@ class SelfAttention(nn.Module):
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-
-        # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
 
 class MLP(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
@@ -97,7 +93,6 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
@@ -112,17 +107,13 @@ class Block(nn.Module):
 
 # From https://github.com/yang-song/score_sde_pytorch/ which is from
 #  https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py
+
 def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000):
     # assumes timesteps is in the range 0 to 1000
-
     assert len(timesteps.shape) == 1  # and timesteps.dtype == tf.int32
     half_dim = embedding_dim // 2
-    # magic number 10000 is from transformers
     emb = math.log(max_positions) / (half_dim - 1)
-    # emb = math.log(2.) / (half_dim - 1)
     emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=timesteps.device) * -emb)
-    # emb = tf.range(num_embeddings, dtype=jnp.float32)[:, None] * emb[None, :]
-    # emb = tf.cast(timesteps, dtype=jnp.float32)[:, None] * emb[None, :]
     emb = timesteps.float()[:, None] * emb[None, :]
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
     if embedding_dim % 2 == 1:  # zero pad
@@ -174,24 +165,17 @@ class JetSeqGPT(nn.Module):
             input_ids is the corrupted tokens (B, D)
             time is the time in the corruption process (B,)
         """
-
-        B, D = idx.size()
+        
+        B, D = input_ids.size()
         n_embd = self.n_embd
-
-        assert input_ids.shape == (B, D)
-        assert time.shape == (B,) 
-        if attn_mask is not None:
-            assert attn_mask.dtype == torch.bool
+        time = time.squeeze(-1) if time.dim() > 1 else time 
 
         pos = torch.arange(0, D, dtype=torch.long, device=input_ids.device) # shape (D)
         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (B, D, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
         time_emb = transformer_timestep_embedding(time, n_embd)
-        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
 
-        assert tok_emb.shape == (B, D, n_embd)
-        assert pos_emb.shape == (D, n_embd)
-        assert time_emb.shape == (B, n_embd)
+        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
 
         for block in self.transformer.blocks:
             h = block(h, attn_mask=attn_mask)
@@ -208,6 +192,4 @@ class JetSeqGPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    def loss(self, logits):
         

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as L
+from torch.nn import functional as F
 from typing import List, Tuple, Dict, Union
 
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -36,6 +37,8 @@ class MarkovJumpBridge(L.LightningModule):
         self.lr=config.lr
         self.max_epochs=config.max_epochs
         self.time_eps=config.time_eps
+        self.num_timesteps = config.num_timesteps if hasattr(config, 'num_timesteps') else 100
+        self.path_snapshots_idx = False
 
         thermostat = ConstantThermostat(self.gamma , self.vocab_size)
 
@@ -48,8 +51,7 @@ class MarkovJumpBridge(L.LightningModule):
 
     # ...Lightning functions
 
-    def forward(self, state: TensorMultiModal, batch: DataCoupling=None) -> TensorMultiModal:
-        
+    def forward(self, state: TensorMultiModal) -> TensorMultiModal:
         return self.model(input_ids=state.discrete.squeeze(-1).long(), 
                           time=state.time.squeeze(-1),
                           )
@@ -58,8 +60,6 @@ class MarkovJumpBridge(L.LightningModule):
 
         state = self.sample_bridges(batch)
         state = state.to(self.device)
-        target = batch.target.discrete.squeeze(-1).to(self.device)        
-
         logits = self.model(input_ids=state.discrete.squeeze(-1).long(),
                             time=state.time.squeeze(-1),
                             )
@@ -79,8 +79,6 @@ class MarkovJumpBridge(L.LightningModule):
     def validation_step(self, batch: DataCoupling, batch_idx):
         state = self.sample_bridges(batch)
         state = state.to(self.device)
-        target = batch.target.discrete.squeeze(-1).to(self.device)        
-
         logits = self.model(input_ids=state.discrete.squeeze(-1).long(),
                             time=state.time.squeeze(-1),
                             )
@@ -148,7 +146,7 @@ class MarkovJumpBridge(L.LightningModule):
         """cross-entropy loss for discrete state classifier
         """
         targets = batch.target.discrete.squeeze(-1).to(self.device)
-        loss_ce = F.cross_entropy(logits.view(-1, logits.size(-1)), targets, ignore_index=-1, reduction='mean') # (B*D,)
+        loss_ce = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction='mean') # (B*D,)
         return loss_ce
 
 
@@ -168,7 +166,6 @@ class MarkovJumpBridge(L.LightningModule):
         solver_discrete = DiscreteSolver(model=self,
                                          vocab_size=self.vocab_size, 
                                          method='tauleap',
-                                        #  topk=5
                                          )
 
         paths = [state.clone()]  # append t=0 source
