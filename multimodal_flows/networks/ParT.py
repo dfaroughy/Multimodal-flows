@@ -34,7 +34,7 @@ class ParticleTransformer(GPT2LMHeadModel):
     def __init__(self, config: GPT2Config, max_time_freq: float = 10.0):
         super().__init__(config)
 
-        # remove the causal mask from Transformer:
+        # remove the causal mask from HF Transformer:
 
         for block in self.transformer.h:
             block.attn.bias.data.fill_(1)
@@ -44,27 +44,27 @@ class ParticleTransformer(GPT2LMHeadModel):
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        time: torch.Tensor        = None,
+        input_ids: torch.LongTensor = None,   # noisy tokens (k_t)
+        labels: torch.LongTensor = None,      # clean target tokens (k_1)
+        time: torch.Tensor = None,
         attention_mask: torch.LongTensor = None,
-        labels: torch.LongTensor = None,
         **kwargs
     ):
         """
         Accepts:
-          - input_ids      (B, D)
-          - time           (B,) or (B,1) with values in [0,1]
-          - attention_mask (B, D)
-          - labels         (B, D), if doing LM training
+          - input_ids             (B, D)
+          - time                  (B,) or (B,1) with values in [0,1]
+          - attention_mask        (B, D)
+          - target labels         (B, D)
         """
 
         inputs_emb = self.transformer.wte(input_ids)  # (B, D, hdim)
-        target_emb = self.target_embedding(labels)    # (B, D, hdim)
-        time_emb = self.time_embedding(time)                # (B, hdim)
-        time_emb = t_emb.unsqueeze(1).expand(*inputs_emb.size())     # (B, D, hdim)
+        target_emb = self.target_embedding(labels) if labels else torch.zeros_like(inputs_emb)  # (B, D, hdim)
+        time_emb = self.time_embedding(time)                            # (B, hdim)
+        time_emb = time_emb.unsqueeze(1).expand(*inputs_emb.size())     # (B, D, hdim)
         
         return super().forward(
-            inputs_embeds=inputs_emb + target_emb + time_emb,
+            inputs_embeds=inputs_emb + time_emb + target_emb, 
             attention_mask=attention_mask,
             labels=labels,
             **kwargs,

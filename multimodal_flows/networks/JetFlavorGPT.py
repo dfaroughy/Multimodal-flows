@@ -30,25 +30,17 @@ class SelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
+
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        # if not self.flash:
-        #     print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-        #     # causal mask to ensure that attention is only applied to the left in the input sequence
-        #     self.register_buffer("bias", torch.tril(torch.ones(config.max_num_particles, config.max_num_particles))
-        #                                 .view(1, 1, config.max_num_particles, config.max_num_particles))
-
 
         if config.qk_layernorm:
             self.q_layernorm = LayerNorm(config.n_embd // self.n_head, bias=config.bias)
@@ -69,8 +61,8 @@ class SelfAttention(nn.Module):
             q = self.q_layernorm(q)
             k = self.k_layernorm(k)
 
-
         # self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
@@ -148,62 +140,66 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     qk_layernorm: bool = False
-    do_x1_sc: bool = False
-    mask_token_id: int = 0
-    proper_timestep_emb: bool = False
-    d3pm_loss_weighting: bool = False
-    d3pm_loss_weighting_maxT: int = 1000
 
-class GPT(nn.Module):
+class JetSeqGPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config: GPTConfig):
         """
         config.vocab_size should include a mask token 
         """
         super().__init__()
-        assert config.vocab_size is not None
-        assert config.max_num_particles is not None
-        self.config = config
-        print("GPT config", self.config)
+
+        self.n_embd = config.n_embd
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.max_num_particles, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-        if config.do_x1_sc:
-            self.xt_x1_proj = nn.Linear(2 * config.n_embd, config.n_embd, bias=config.bias)
+        # initialization:
 
-        # init all weights
+        self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
         self.apply(self._init_weights)
-        # apply special scaled init to the residual projections, per GPT-2 paper
+
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-
-        # report number of parameters
-        print("INFO: number of parameters: %.2fM" % (self.get_num_params()/1e6,))
-
-    def get_num_params(self, non_embedding=True):
+  
+    def forward(self, input_ids, time, mask=None, attn_mask=None):
         """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
+            input_ids is the corrupted tokens (B, D)
+            time is the time in the corruption process (B,)
         """
-        n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
-        return n_params
+
+        B, D = idx.size()
+        n_embd = self.n_embd
+
+        assert input_ids.shape == (B, D)
+        assert time.shape == (B,) 
+        if attn_mask is not None:
+            assert attn_mask.dtype == torch.bool
+
+        pos = torch.arange(0, D, dtype=torch.long, device=input_ids.device) # shape (D)
+        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (B, D, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
+        time_emb = transformer_timestep_embedding(time, n_embd)
+        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
+
+        assert tok_emb.shape == (B, D, n_embd)
+        assert pos_emb.shape == (D, n_embd)
+        assert time_emb.shape == (B, n_embd)
+
+        for block in self.transformer.blocks:
+            h = block(h, attn_mask=attn_mask)
+
+        h = self.transformer.ln_f(h)
+        logits = self.transformer.head(h)
+
+        return logits
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -213,128 +209,5 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def _run_net(self, idx, time, x1=None, attn_mask=None):
-        if attn_mask is not None:
-            assert attn_mask.dtype == torch.bool
-
-        device = idx.device
-        b, t = idx.size()
-        n_embd = self.config.n_embd
-        assert t <= self.config.max_num_particles, f"Cannot forward sequence of length {t}, block size is only {self.config.max_num_particles}"
-        assert (x1 is not None) == (self.config.do_x1_sc)
-
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        assert tok_emb.shape == (b, t, n_embd)
-        assert pos_emb.shape == (t, n_embd)
-
-        if self.config.do_x1_sc:
-            x1_tok_emb = self.transformer.wte(x1) # token embeddings of shape (b, t, n_embd)
-            tok_emb = self.xt_x1_proj(torch.cat([tok_emb, x1_tok_emb], dim=-1))
-
-        assert time.shape == (b,)
-        if self.config.proper_timestep_emb:
-            time_emb = transformer_timestep_embedding(time * 1000, n_embd)
-        else:
-            time_emb = transformer_timestep_embedding(time, n_embd)
-        assert time_emb.shape == (b, n_embd)
-
-        x = self.transformer.drop(tok_emb.view(b, t, n_embd) + pos_emb.view(1, t, n_embd) + time_emb.view(b, 1, n_embd))
-
-        for block in self.transformer.h:
-            x = block(x, attn_mask=attn_mask)
-
-        x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
+    def loss(self, logits):
         
-        return logits
-
-    def forward(self, idx, time, targets=None, target_mask=None, do_self_conf_loop=False, attn_mask=None):
-        """
-            idx is the corrupted tokens (b, t)
-            time is the time in the corruption process (b,)
-            targets is the clean data (b, t)
-            target_mask is 1.0 for points in the sequence that have been corrupted
-                and should have loss calculated on them (b, t) 
-            do_self_cond_loop is whether to do two passes to train the self conditioning
-        """
-        b, t = idx.size()
-        assert (time < 1.1).all() # 0 to 1 not 0 to 1000
-
-        if self.config.do_x1_sc:
-            if do_self_conf_loop:
-                with torch.no_grad():
-                    x1_mask = self.config.mask_token_id * torch.ones_like(idx) # this keeps x1 as the same dtype as idx
-                    logits = self._run_net(idx, time, x1=x1_mask, attn_mask=attn_mask)
-                    x1_sample = torch.multinomial(F.softmax(logits, dim=-1).view(b*t, -1), num_samples=1).view(b, t)
-                    x1_sample = x1_sample.detach()
-
-                logits = self._run_net(idx, time, x1=x1_sample, attn_mask=attn_mask)
-
-            else:
-                x1_mask = self.config.mask_token_id * torch.ones_like(idx) # this keeps x1 as the same dtype as idx
-                logits = self._run_net(idx, time, x1=x1_mask, attn_mask=attn_mask)
-
-        else:
-            logits = self._run_net(idx, time, attn_mask=attn_mask)
-
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction='none') # (b*t,)
-            masked_loss = loss * target_mask.view(-1)
-
-            if self.config.d3pm_loss_weighting:
-                scaled_up_time = self.config.d3pm_loss_weighting_maxT * time # (b,)
-                scaled_up_time = scaled_up_time.view(b, 1).repeat(1, t).view(-1) # (b*t,)
-                scaled_up_time = torch.clamp(scaled_up_time, 0.01 * self.config.d3pm_loss_weighting_maxT, 0.99 * self.config.d3pm_loss_weighting_maxT)
-
-                masked_loss = masked_loss * 1/scaled_up_time
-
-            mean_loss = torch.sum(masked_loss) / (torch.sum(target_mask) + 1e-5)
-        else:
-            mean_loss = None
-
-        return logits, mean_loss
-
-
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
-        ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        # Create AdamW optimizer and use the fused version if it is available
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
-
-        return optimizer
-
-    def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
-        # first estimate the number of flops we do per iteration.
-        # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
-        N = self.get_num_params()
-        cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.max_num_particles
-        flops_per_token = 6*N + 12*L*H*Q*T
-        flops_per_fwdbwd = flops_per_token * T
-        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
-        # express our flops throughput as ratio of A100 bfloat16 peak flops
-        flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
-        mfu = flops_achieved / flops_promised
-        return mfu

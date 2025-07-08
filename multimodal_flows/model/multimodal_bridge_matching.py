@@ -12,7 +12,7 @@ from transformers import GPT2Config
 from model.solvers import DiscreteSolver
 from model.bridges import RandomTelegraphBridge
 from model.thermostats import Thermostat
-from networks.ParT import ParticleTransformer
+from networks.JetFlavorGPT import JetSeqGPT
 
 class ConstantThermostat(Thermostat):
     ''' beta(r) = const.
@@ -24,79 +24,47 @@ class ConstantThermostat(Thermostat):
 class MarkovJumpBridge(L.LightningModule):
     """Bridge-Matching model for multi-modal data
     """
-    def __init__(self, 
-                 gamma=0.075, 
-                 vocab_size=9,
-                 num_jets=100_000,
-                 max_num_particles=150,
-                 lr_final=0.0001,
-                 lr=0.001,
-                 max_epochs=100,
-                 time_eps=1e-5,
-                 n_embd=128,
-                 n_layer=4,
-                 n_head=4,
-                 activation_function='gelu_new',
-                 num_timesteps=1000,
-                 ):
+    def __init__(self, config):
                  
         super().__init__()
 
-        self.gamma = gamma
-        self.vocab_size = vocab_size
-        self.path_snapshots_idx = True
-        self.num_jets = num_jets
-        self.max_num_particles = max_num_particles
-        self.lr_final = lr_final
-        self.lr = lr
-        self.max_epochs = max_epochs
-        self.time_eps = time_eps
-        self.num_timesteps = num_timesteps  
-
+        self.gamma=config.gamma
+        self.vocab_size=config.vocab_size
+        self.num_jets=config.num_jets
+        self.max_num_particles=config.max_num_particles
+        self.lr_final=config.lr_final
+        self.lr=config.lr
+        self.max_epochs=config.max_epochs
+        self.time_eps=config.time_eps
 
         thermostat = ConstantThermostat(self.gamma , self.vocab_size)
 
-        self.bridge_discrete = RandomTelegraphBridge(gamma=self.gamma ,
+        self.bridge_discrete = RandomTelegraphBridge(gamma=self.gamma,
                                                      vocab_size=self.vocab_size,
                                                      thermostat_fn=thermostat,
-                                                     )
+                                                     )        
+        self.model = JetSeqGPT(config)
         self.save_hyperparameters()
-
-        config = GPT2Config(vocab_size=self.vocab_size, 
-                            n_positions=self.max_num_particles,  
-                            n_ctx=self.max_num_particles,  
-                            n_embd=n_embd,
-                            n_layer=n_layer,
-                            n_head=n_head,
-                            activation_function=activation_function,
-                            attn_pdrop=0.1,
-                            embd_pdrop=0.1,
-                            resid_pdrop=0.1,
-                        )
-
-        self.model = ParticleTransformer(config)
 
     # ...Lightning functions
 
     def forward(self, state: TensorMultiModal, batch: DataCoupling=None) -> TensorMultiModal:
         
         return self.model(input_ids=state.discrete.squeeze(-1).long(), 
-                          attention_mask=state.mask.squeeze(-1).long(),
                           time=state.time.squeeze(-1),
                           )
         
-    def training_step(self, batch: DataCoupling, batch_idx) -> Dict[str, torch.Tensor]:
+    def training_step(self, batch: DataCoupling, batch_idx):
 
         state = self.sample_bridges(batch)
         state = state.to(self.device)
         target = batch.target.discrete.squeeze(-1).to(self.device)        
 
-        outputs = self.model(input_ids=state.discrete.squeeze(-1).long(),
-                             time=state.time.squeeze(-1),
-                             attention_mask=state.mask.squeeze(-1).long(),
-                             labels=target,
+        logits = self.model(input_ids=state.discrete.squeeze(-1).long(),
+                            time=state.time.squeeze(-1),
                             )
-        loss = outputs.loss
+        loss = self.loss(logits, batch)
+
         self.log("train_loss",
                  loss,
                  on_epoch=True,
@@ -108,17 +76,16 @@ class MarkovJumpBridge(L.LightningModule):
 
         return {"loss": loss}
 
-    def validation_step(self, batch: DataCoupling, batch_idx) -> Dict[str, torch.Tensor]:
+    def validation_step(self, batch: DataCoupling, batch_idx):
         state = self.sample_bridges(batch)
         state = state.to(self.device)
-        target = batch.target.discrete.squeeze(-1).to(self.device)
+        target = batch.target.discrete.squeeze(-1).to(self.device)        
 
-        outputs = self.model(input_ids=state.discrete.squeeze(-1).long(),
-                             time=state.time.squeeze(-1),
-                             attention_mask=state.mask.squeeze(-1).long(),
-                             labels=target.long(),
+        logits = self.model(input_ids=state.discrete.squeeze(-1).long(),
+                            time=state.time.squeeze(-1),
                             )
-        loss = outputs.loss
+        loss = self.loss(logits, batch)
+        
         self.log("val_loss",
                  loss,
                  on_epoch=True,
@@ -130,9 +97,7 @@ class MarkovJumpBridge(L.LightningModule):
 
         return {"val_loss": loss}
 
-    def predict_step(
-        self, batch: DataCoupling, batch_idx
-    ) -> Tuple[TensorMultiModal, TensorMultiModal, TensorMultiModal]:
+    def predict_step(self, batch: DataCoupling, batch_idx):
 
         """generate target data from source by solving EOMs
         """
@@ -143,7 +108,6 @@ class MarkovJumpBridge(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-
         scheduler = CosineAnnealingLR(
             optimizer,
             T_max=self.max_epochs,    # full cycle length
@@ -178,6 +142,15 @@ class MarkovJumpBridge(L.LightningModule):
         noisy_tokens = self.bridge_discrete.sample(time, batch)
 
         return TensorMultiModal(time, None, noisy_tokens, mask)
+
+
+    def loss(self, logits, batch: DataCoupling) -> torch.Tensor:
+        """cross-entropy loss for discrete state classifier
+        """
+        targets = batch.target.discrete.squeeze(-1).to(self.device)
+        loss_ce = F.cross_entropy(logits.view(-1, logits.size(-1)), targets, ignore_index=-1, reduction='mean') # (B*D,)
+        return loss_ce
+
 
     def simulate_dynamics(self, state: TensorMultiModal) -> TensorMultiModal:
         """generate target data from source input using trained dynamics
