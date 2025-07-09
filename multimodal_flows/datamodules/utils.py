@@ -17,6 +17,49 @@ plt.rcParams["figure.autolayout"] = False
 vector.register_awkward()
 
 
+def jet_set_to_seq(part_set: TensorMultiModal, vocab_size: int):
+    """Convert a particle set to a sequence with start, end and pad tokens.
+    
+    Args:
+        particle_seq (TensorMultiModal): The particle set.
+        vocab_size (int): The size of the vocabulary, used to determine the token values.
+        
+    Returns:
+        np.ndarray: The sequence with start, end and pad tokens.
+                    start_token = vocab_size + 1
+                    end_token = vocab_size + 2
+                    pad_token = vocab_size + 3
+    """
+
+    particle_set = part_set.clone()
+    start_token = vocab_size + 1
+    end_token = vocab_size + 2
+    pad_token = vocab_size + 3
+    
+    if not hasattr(particle_set, 'discrete'):
+        raise ValueError("The particle_seq must have a 'discrete' attribute.")
+
+    seq = particle_set.discrete.squeeze(-1).numpy()  # (N, D)
+    N, _ = seq.shape
+
+    start = np.full((N, 1), start_token, dtype=int)
+    extra_pad = np.full((N, 1), pad_token, dtype=int)
+    seq[seq==0] = pad_token 
+    seq = np.concatenate([start, seq, extra_pad], axis=1)
+
+    idx_eos = (seq != pad_token).sum(axis=1)
+
+    for i, jet in enumerate(seq):
+        jet[idx_eos[i]] = end_token
+    
+    particle_set.discrete = torch.tensor(seq).long()
+    particle_set.mask = (particle_set.discrete != pad_token).long()
+
+    return particle_set
+
+
+
+
 @dataclass
 class ParticleClouds:
     """

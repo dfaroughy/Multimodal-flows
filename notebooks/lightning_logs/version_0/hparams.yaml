@@ -1,0 +1,14 @@
+activation: gelu_new
+dropout_att: 0.1
+dropout_emb: 0.1
+dropout_res: 0.1
+learning_rate: 0.0005
+learning_rate_final: 0.0
+max_seq_length: 150
+n_embd: 128
+n_head: 1
+n_inner: null
+n_layer: 2
+pos_encoding: true
+temperature: 1.0
+top_k: null
