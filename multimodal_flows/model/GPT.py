@@ -53,7 +53,7 @@ class JetFlavorSeqGPT(L.LightningModule):
                           attention_mask=attention_mask
                           ).logits
 
-    def training_step(self, batch: DataCoupling, batch_idx)
+    def training_step(self, batch: DataCoupling, batch_idx):
         loss = self.model(input_ids=batch.target.discrete,
                           attention_mask=batch.target.mask,
                           labels=self._mask_pads(batch.target.discrete),
