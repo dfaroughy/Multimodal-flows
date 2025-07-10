@@ -44,6 +44,7 @@ class JetFlavorSeqGPT(L.LightningModule):
         )
 
         self.model = GPT2LMHeadModel(config_gpt)
+        self.config = config
         self.save_hyperparameters()
 
     #...train/inference methods
