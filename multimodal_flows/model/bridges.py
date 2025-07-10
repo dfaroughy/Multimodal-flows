@@ -40,43 +40,6 @@ class UniformFlow:
         return 0.0
 
 
-class SimplexFlow:
-    """Conditional Flow-Matching for continuous states on the simplex.
-    This bridge is a linear interpolation between boundaries states at t=0 and t=1.
-    notation:
-      - t: time
-      - e0: one-hot encoded source state at t=0
-      - e1: one-hot encoded target state at t=1
-      - x: simplex state at time t
-    """
-
-    def __init__(self, sigma):
-        self.sigma = sigma
-
-    def sample(self, t, batch: DataCoupling):
-        e0 = batch.source.continuous
-        e1 = batch.target.continuous
-        x = t * e1 + (1.0 - t) * e0
-        concentration = torch.ones(8)
-        dirichlet = torch.distributions.dirichlet.Dirichlet(concentration)
-        self.z = dirichlet.sample(e0.shape[:-1]).to(e0.device)
-        std = self.sigma * t * (1.0 - t)
-        return (x + std * self.z) / (1 + std)
-
-    def drift(self, state: TensorMultiModal, batch: DataCoupling):
-        t = state.time
-        e0 = batch.source.continuous
-        e1 = batch.target.continuous        
-        xt = state.continuous
-        std = self.sigma * t * (1.0 - t)
-        std_dot = self.sigma *(1.0 - 2.0 * t) 
-        return (e1 - e0 + std_dot * (self.z - xt)) / (1 + std) 
-
-    def diffusion(self, state: TensorMultiModal):
-        return 0.0
-
-
-
 class SchrodingerBridge:
     """Schrodinger bridge for continuous states
     notation:

@@ -40,7 +40,7 @@ gpt = JetFlavorSeqGPT.load_from_checkpoint(f"/home/df630/Multimodal-flows/jet_se
 
 #...dataset & dataloaders:
 
-aoj = AspenOpenJets(data_dir="/home/df630/Multimodal-Bridges/data/aoj", data_files="RunG_batch0.h5")
+aoj = AspenOpenJets(data_dir="/home/df630/Multimodal-Bridges/data/aoj", data_files="RunG_batch1.h5")
 
 jets, _ = aoj(num_jets=config.num_jets,
               max_num_particles=config.max_seq_length,

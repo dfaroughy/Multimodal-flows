@@ -4,8 +4,8 @@ from torch.distributions import Categorical
 
 
 class ContinuousSolver:
-    def __init__(self, config, model):
-        self.method = config.model.solver_continuous
+    def __init__(self, model, method='euler'):
+        self.method = method
         self.model = model
 
     def fwd_step(self, state, delta_t):
@@ -19,8 +19,7 @@ class ContinuousSolver:
             return state
 
     def euler_step(self, state, delta_t):
-        heads = self.model(state)
-        drift = heads.continuous
+        drift = self.model(state)
         state.continuous += delta_t * drift
         return state
 
@@ -36,7 +35,7 @@ class ContinuousSolver:
 class DiscreteSolver:
     def __init__(self, model, vocab_size, method='tauleap', topk=None):
         self.method = method
-        self.vocab_size =vocab_size
+        self.vocab_size = vocab_size
         self.model = model
         self.topk = topk
 

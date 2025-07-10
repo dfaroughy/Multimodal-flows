@@ -77,7 +77,6 @@ class AspenOpenJets:
 
             feats, mask = self._read_aoj_file(path, num_jets)
             
-
             if features["continuous"]:  
                 list_continuous_feats.append(
                     torch.cat([feats[x] for x in features["continuous"]], dim=-1)

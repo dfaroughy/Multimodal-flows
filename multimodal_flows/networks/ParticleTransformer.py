@@ -132,69 +132,7 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     qk_layernorm: bool = False
 
-class JetSeqGPT(nn.Module):
-
-    def __init__(self, config: GPTConfig):
-        """
-        config.vocab_size should include a mask token 
-        """
-        super().__init__()
-
-        self.n_embd = config.n_embd
-
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.max_num_particles, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-            blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
-            head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
-        ))
-
-        # initialization:
-
-        self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
-        self.apply(self._init_weights)
-
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-  
-    def forward(self, input_ids, time, mask=None, attn_mask=None):
-        """
-            input_ids is the corrupted tokens (B, D)
-            time is the time in the corruption process (B,)
-        """
-        
-        B, D = input_ids.size()
-        n_embd = self.n_embd
-        time = time.squeeze(-1) if time.dim() > 1 else time 
-
-        pos = torch.arange(0, D, dtype=torch.long, device=input_ids.device) # shape (D)
-        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (B, D, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
-        time_emb = transformer_timestep_embedding(time, n_embd)
-
-        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
-
-        for block in self.transformer.blocks:
-            h = block(h, attn_mask=attn_mask)
-
-        h = self.transformer.ln_f(h)
-        logits = self.transformer.head(h)
-
-        return logits
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        
-
-class FlavorFormer(nn.Module):
+class ParticleGPT(nn.Module):
 
     def __init__(self, config: GPTConfig):
         """
@@ -213,13 +151,21 @@ class FlavorFormer(nn.Module):
             head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
         ))
 
+        # initialization:
+
+        # self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
+        # self.apply(self._init_weights)
+        # for pn, p in self.named_parameters():
+        #     if pn.endswith('c_proj.weight'):
+        #         torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+  
     def forward(self, xt, time, mask=None, attn_mask=None):
         """
             input_ids is the corrupted tokens (B, D)
             time is the time in the corruption process (B,)
         """
         
-        B, D, V = xt.size()
+        B, D = xt.size()
         n_embd = self.n_embd
         time = time.squeeze(-1) if time.dim() > 1 else time 
 
@@ -228,14 +174,21 @@ class FlavorFormer(nn.Module):
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
         time_emb = transformer_timestep_embedding(time, n_embd)
 
-        h = self.transformer.drop(xt_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
+        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
 
         for block in self.transformer.blocks:
             h = block(h, attn_mask=attn_mask)
 
         h = self.transformer.ln_f(h)
+        logits = self.transformer.head(h)
 
-        return self.transformer.head(h)
+        return logits
 
-
+    # def _init_weights(self, module):
+    #     if isinstance(module, nn.Linear):
+    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    #         if module.bias is not None:
+    #             torch.nn.init.zeros_(module.bias)
+    #     elif isinstance(module, nn.Embedding):
+    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         
