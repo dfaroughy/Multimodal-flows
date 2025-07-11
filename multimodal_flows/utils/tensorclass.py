@@ -1,8 +1,9 @@
+
+import torch
+import h5py
 from dataclasses import dataclass
 from typing import List
 
-import h5py
-import torch
 
 """ Data classes for multi-modal states and data couplings. 
 """

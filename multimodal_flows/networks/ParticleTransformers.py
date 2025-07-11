@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from dataclasses import dataclass
-from tensorclass import TensorMultiModal
+
+from utils.tensorclass import TensorMultiModal
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -142,7 +143,6 @@ class FlavorFormer(nn.Module):
             head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
         ))
 
-        self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
         self.apply(self._init_weights)
 
         for pn, p in self.named_parameters():
@@ -151,38 +151,38 @@ class FlavorFormer(nn.Module):
 
     def forward(self, state: TensorMultiModal) -> torch.Tensor:
         """
-            state.continuous is the corrupted tokens (B, D)
+            state.continuous is the corrupted state (B, D, 1) or (B, D, vocab_size) if onehot is True
             state.time is the time in the corruption process (B,)
         """
+        
         B, D = state.shape
-        inputs = state.continuous 
-        attn_mask = state.mask.squeeze(-1) 
-        time = state.time.squeeze(-1) if state.time.dim() > 1 else state.time 
+        inputs = state.continuous if state.has_continuous else state.discrete
 
-        pos = torch.arange(0, D, dtype=torch.long, device=state.continuous.device) # shape (D)
-        tok_emb = self.transformer.wte(inputs) # token embeddings of shape (B, D, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
-        time_emb = transformer_timestep_embedding(time.squeeze(-1), self.n_embd)  # time embedding of shape (B, n_embd)
+        pos = torch.arange(0, D, dtype=torch.long, device=state.time.device)    # shape (D)
+        tok_emb = self.transformer.wte(inputs)                                  # token embeddings of shape (B, D, n_embd)
+        pos_emb = self.transformer.wpe(pos)                                     # position embeddings of shape (D, n_embd)
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)      # time embedding of shape (B, n_embd)
 
         h = self.transformer.drop(tok_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
 
         for block in self.transformer.blocks:
-            h = block(h, attn_mask=attn_mask.bool())
+            h = block(h, attn_mask=None)
+            h += pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
 
         h = self.transformer.ln_f(h)
 
         return self.transformer.head(h)
 
     def _init_weights(self, module):
+
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-
-    
 
 # class JetSeqGPT(nn.Module):
 

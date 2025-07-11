@@ -5,13 +5,6 @@ from pathlib import Path
 import torch.distributed as dist
 
 
-def get_from_json(key, path, name="metadata.json"):
-    path = os.path.join(path, name)
-    with open(path, "r") as f:
-        file = json.load(f)
-    return file[key]
-
-
 class SimpleLogger:
     @staticmethod
     def info(message, condition=True):

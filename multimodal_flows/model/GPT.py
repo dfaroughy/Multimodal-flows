@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader, TensorDataset
 import torch.nn.functional as F
 from scipy.special import gammaln, gamma, factorial
 
-from tensorclass import TensorMultiModal
-from datamodules.datasets import DataCoupling
+from utils.tensorclass import TensorMultiModal
+from utils.datasets import DataCoupling
 from transformers import GPT2Config, GPT2LMHeadModel
 
 class JetFlavorSeqGPT(L.LightningModule):

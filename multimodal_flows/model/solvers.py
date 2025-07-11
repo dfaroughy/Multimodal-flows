@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from tensorclass import TensorMultiModal
+
+from utils.tensorclass import TensorMultiModal
 
 class ContinuousSolver:
     def __init__(self, model, method='euler'):

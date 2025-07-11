@@ -6,11 +6,10 @@ from typing import List, Tuple, Dict, Union
 from abc import ABC, abstractmethod
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from tensorclass import TensorMultiModal
-from datamodules.datasets import DataCoupling
+from utils.tensorclass import TensorMultiModal
+from utils.datasets import DataCoupling
 from model.solvers import DiscreteSolver
-from model.bridges import RandomTelegraphBridge
-from networks.ParticleTransformers import JetSeqGPT
+from networks.ParticleTransformers import FlavorFormer
 
 
 class MarkovJumpBridge(L.LightningModule):
@@ -33,7 +32,7 @@ class MarkovJumpBridge(L.LightningModule):
 
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
         self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
-        self.model = JetSeqGPT(config)
+        self.model = FlavorFormer(config)
         
         self.save_hyperparameters()
 
@@ -146,7 +145,6 @@ class MarkovJumpBridge(L.LightningModule):
         state.time = torch.full((len(state), 1), eps, device=self.device)  # (B,1) t_0=eps
         state.broadcast_time() # (B,1) -> (B,D,1)
         steps = self.num_timesteps
-        print('INFO: Simulating {} steps'.format(steps))
 
         time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
