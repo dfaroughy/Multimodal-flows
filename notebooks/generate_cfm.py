@@ -119,13 +119,9 @@ def plot_flavor_feats(sample, particle_set, path_dir=None):
     plt.savefig(f'{path_dir}/jet_flavor_high_level.png', dpi=500, bbox_inches='tight')
 
 
-
-
-
 cfm = ConditionalFlowMatching.load_from_checkpoint(f"/home/df630/Multimodal-flows/jet_sequences/{config.experiment_id}/checkpoints/best.ckpt")
 print('device: ', cfm.device)
 #...dataset & dataloaders:
-
 
 noise = torch.randn((config.num_jets, config.max_num_particles, config.vocab_size),)
 mask = torch.ones((config.num_jets, config.max_num_particles, 1),).long()

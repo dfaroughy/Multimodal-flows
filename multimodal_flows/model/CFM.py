@@ -12,7 +12,7 @@ from transformers import GPT2Config
 
 from model.solvers import ContinuousSolver
 from model.thermostats import Thermostat
-from networks.JetFlavorGPT import FlavorFormer
+from networks.ParticleTransformers import FlavorFormer
 
 class ConditionalFlowMatching(L.LightningModule):
     def __init__(self, config):
@@ -28,6 +28,8 @@ class ConditionalFlowMatching(L.LightningModule):
         self.max_epochs=config.max_epochs
         self.time_eps=config.time_eps
         self.num_timesteps = config.num_timesteps if hasattr(config, 'num_timesteps') else 10
+        self.mean = config.mean
+        self.std = config.std
         self.path_snapshots_idx = False
 
         self.bridge_continuous = UniformFlow(self.sigma)        
@@ -38,16 +40,15 @@ class ConditionalFlowMatching(L.LightningModule):
     # ...Lightning functions
 
     def forward(self, state: TensorMultiModal) -> TensorMultiModal:
-        return self.model(state.continuous, state.time.squeeze(-1))
+        return self.model(state)
         
     def training_step(self, batch: DataCoupling, batch_idx):
 
         state = self.sample_bridges(batch)
         state = state.to(self.device)
-        drift = self.model(xt=state.continuous,
-                           time=state.time.squeeze(-1),
-                           )
-        loss = self.loss(drift, batch)
+        vt = self.model(state)
+        ut = self.bridge_continuous.conditional_drift(state, batch)
+        loss = F.mse_loss(vt, ut, reduction='mean')
 
         self.log("train_loss",
                  loss,
@@ -59,15 +60,15 @@ class ConditionalFlowMatching(L.LightningModule):
                  )
 
         return {"loss": loss}
+        
 
     def validation_step(self, batch: DataCoupling, batch_idx):
 
         state = self.sample_bridges(batch)
         state = state.to(self.device)
-        drift = self.model(xt=state.continuous,
-                           time=state.time.squeeze(-1),
-                           )
-        loss = self.loss(drift, batch)
+        vt = self.model(state)
+        ut = self.bridge_continuous.conditional_drift(state, batch)
+        loss = F.mse_loss(vt, ut, reduction='mean')
         
         self.log("val_loss",
                  loss,
@@ -80,13 +81,14 @@ class ConditionalFlowMatching(L.LightningModule):
 
         return {"val_loss": loss}
 
-    def predict_step(self, batch: DataCoupling, batch_idx):
 
-        """generate target data from source by solving EOMs
-        """
-        paths = self.simulate_dynamics(batch.source)  # still preprocessed!
+    def predict_step(self, batch: DataCoupling, batch_idx, dataloader_idx=0) -> TensorMultiModal:
+        ''' sample generation
+        '''
+        traj = self.simulate_dynamics(batch)
+        sample = traj.target
 
-        return paths.detach().cpu()
+        return sample.detach().cpu()
 
     def configure_optimizers(self):
 
@@ -116,58 +118,31 @@ class ConditionalFlowMatching(L.LightningModule):
         eps = self.time_eps  # min time resolution
         t = eps + (1 - eps) * torch.rand(len(batch), device=self.device)
         time = self.reshape_time_dim_like(t, batch)
+        state = self.bridge_continuous.sample(time, batch)
 
-        source_data = torch.randn((len(batch), self.max_num_particles, self.vocab_size), device=self.device)
-        mask = torch.ones((len(batch), 
-                           self.max_num_particles, 1), 
-                           device=self.device).long()
+        return state
 
-        batch.source = TensorMultiModal(continuous=source_data, mask=mask)
-        noisy_data = self.bridge_continuous.sample(time, batch)
-
-        return TensorMultiModal(time=time, continuous=noisy_data, mask=mask)
-
-
-    def loss(self, drift, batch: DataCoupling) -> torch.Tensor:
-
-        """MSE loss for flow-matching
-        """
-
-        targets = batch.target.continuous.to(self.device)
-        loss_mse = F.mse_loss(drift, targets, reduction='mean')
-        return loss_mse
-
-
-    def simulate_dynamics(self, state: TensorMultiModal) -> TensorMultiModal:
+    def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
-
-        eps = self.time_eps  # min time resolution
-        state.time = torch.full((len(state), 1), eps, device=self.device)  # (B,1) t_0=eps
-        state.broadcast_time() # (B,1) -> (B,D,1)
-        steps = self.num_timesteps
-        time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
+        solver = ContinuousSolver(model=self, method='euler',)
+        time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
-        solver = ContinuousSolver(model=self, method='euler',)
-        paths = [state.clone()]  # append t=0 source
-
+        state = batch.source.clone()
+        state.time = torch.full((len(state), 1), self.time_eps, device=self.device)  # (B,1) t_0=eps
+        state.broadcast_time() # (B,1) -> (B,D,1)
+        
         for i, t in enumerate(time_steps):
-            is_last_step = (i == len(time_steps) - 1)
-
             state.time = torch.full((len(state), 1), t.item(), device=self.device)            
             state = solver.fwd_step(state, delta_t)
             state.broadcast_time() 
-                        
-            if isinstance(self.path_snapshots_idx, list):
-                for i in self.path_history_idx:
-                    paths.append(state.clone())
 
-        paths.append(state)  # append t=1 generated target
-        paths = TensorMultiModal.stack(paths, dim=0)
-        return paths
+        batch.target = state
+
+        return batch
 
     def reshape_time_dim_like(self, t, state: Union[TensorMultiModal, DataCoupling]):
 
@@ -192,15 +167,16 @@ class UniformFlow:
     def __init__(self, sigma):
         self.sigma = sigma
 
-    def sample(self, t, batch: DataCoupling):
+    def sample(self, time, batch: DataCoupling) -> TensorMultiModal:
         x0 = batch.source.continuous
         x1 = batch.target.continuous
-        xt = t * x1 + (1.0 - t) * x0
+        xt = time * x1 + (1.0 - time) * x0
         z = torch.randn_like(xt)
         std = self.sigma
-        return xt + std * z
+        state = xt + std * z
+        return TensorMultiModal(time=time, continuous=state, mask=batch.target.mask)
 
-    def drift(self, state: TensorMultiModal, batch: DataCoupling):
+    def conditional_drift(self, state: TensorMultiModal, batch: DataCoupling) -> torch.Tensor:
         x0 = batch.source.continuous
         x1 = batch.target.continuous
         xt = state.continuous

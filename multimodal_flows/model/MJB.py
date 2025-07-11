@@ -10,7 +10,7 @@ from tensorclass import TensorMultiModal
 from datamodules.datasets import DataCoupling
 from model.solvers import DiscreteSolver
 from model.bridges import RandomTelegraphBridge
-from networks.JetFlavorGPT import JetSeqGPT
+from networks.ParticleTransformers import JetSeqGPT
 
 
 class MarkovJumpBridge(L.LightningModule):

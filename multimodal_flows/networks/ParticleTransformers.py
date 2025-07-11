@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from dataclasses import dataclass
+from tensorclass import TensorMultiModal
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -80,9 +81,9 @@ class SelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_fc    = nn.Linear(config.n_embd, config.n_inner, bias=config.bias)
         self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(config.n_inner , config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -121,20 +122,10 @@ def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000
     assert emb.shape == (timesteps.shape[0], embedding_dim)
     return emb
 
-@dataclass
-class GPTConfig:
-    max_num_particles: int = 150
-    vocab_size: int = 9 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 8
-    n_head: int = 4
-    n_embd: int = 256
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    qk_layernorm: bool = False
 
-class ParticleGPT(nn.Module):
+class FlavorFormer(nn.Module):
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config):
         """
         config.vocab_size should include a mask token 
         """
@@ -143,7 +134,7 @@ class ParticleGPT(nn.Module):
         self.n_embd = config.n_embd
 
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Linear(config.vocab_size, config.n_embd),
+            wte = nn.Linear(config.vocab_size, config.n_embd) if config.onehot else nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.max_num_particles, config.n_embd),
             drop = nn.Dropout(config.dropout),
             blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
@@ -151,44 +142,106 @@ class ParticleGPT(nn.Module):
             head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
         ))
 
-        # initialization:
+        self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
+        self.apply(self._init_weights)
 
-        # self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
-        # self.apply(self._init_weights)
-        # for pn, p in self.named_parameters():
-        #     if pn.endswith('c_proj.weight'):
-        #         torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-  
-    def forward(self, xt, time, mask=None, attn_mask=None):
-        """
-            input_ids is the corrupted tokens (B, D)
-            time is the time in the corruption process (B,)
-        """
-        
-        B, D = xt.size()
-        n_embd = self.n_embd
-        time = time.squeeze(-1) if time.dim() > 1 else time 
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-        pos = torch.arange(0, D, dtype=torch.long, device=xt.device) # shape (D)
-        xt_emb = self.transformer.wte(xt) # token embeddings of shape (B, D, n_embd)
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
+        """
+            state.continuous is the corrupted tokens (B, D)
+            state.time is the time in the corruption process (B,)
+        """
+        B, D = state.shape
+        inputs = state.continuous 
+        attn_mask = state.mask.squeeze(-1) 
+        time = state.time.squeeze(-1) if state.time.dim() > 1 else state.time 
+
+        pos = torch.arange(0, D, dtype=torch.long, device=state.continuous.device) # shape (D)
+        tok_emb = self.transformer.wte(inputs) # token embeddings of shape (B, D, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
-        time_emb = transformer_timestep_embedding(time, n_embd)
+        time_emb = transformer_timestep_embedding(time.squeeze(-1), self.n_embd)  # time embedding of shape (B, n_embd)
 
-        h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
+        h = self.transformer.drop(tok_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
 
         for block in self.transformer.blocks:
-            h = block(h, attn_mask=attn_mask)
+            h = block(h, attn_mask=attn_mask.bool())
 
         h = self.transformer.ln_f(h)
-        logits = self.transformer.head(h)
 
-        return logits
+        return self.transformer.head(h)
 
-    # def _init_weights(self, module):
-    #     if isinstance(module, nn.Linear):
-    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    #         if module.bias is not None:
-    #             torch.nn.init.zeros_(module.bias)
-    #     elif isinstance(module, nn.Embedding):
-    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+
+    
+
+# class JetSeqGPT(nn.Module):
+
+#     def __init__(self, config):
+#         """
+#         config.vocab_size should include a mask token 
+#         """
+#         super().__init__()
+
+#         self.n_embd = config.n_embd
+
+#         self.transformer = nn.ModuleDict(dict(
+#             wte = nn.Embedding(config.vocab_size, config.n_embd) ,
+#             wpe = nn.Embedding(config.max_num_particles, config.n_embd),
+#             drop = nn.Dropout(config.dropout),
+#             blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+#             ln_f = LayerNorm(config.n_embd, bias=config.bias),
+#             head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # output head 
+#         ))
+
+#         # initialization:
+
+#         self.transformer.wte.weight = self.transformer.head.weight # https://paperswithcode.com/method/weight-tying
+#         self.apply(self._init_weights)
+
+#         for pn, p in self.named_parameters():
+#             if pn.endswith('c_proj.weight'):
+#                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+  
+#     def forward(self, input_ids, time, mask=None, attn_mask=None):
+#         """
+#             input_ids is the corrupted tokens (B, D)
+#             time is the time in the corruption process (B,)
+#         """
+        
+#         B, D = input_ids.size()
+#         n_embd = self.n_embd
+#         time = time.squeeze(-1) if time.dim() > 1 else time 
+
+#         pos = torch.arange(0, D, dtype=torch.long, device=input_ids.device) # shape (D)
+#         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (B, D, n_embd)
+#         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (D, n_embd)
+#         time_emb = transformer_timestep_embedding(time, n_embd)
+
+#         h = self.transformer.drop(tok_emb.view(B, D, n_embd) + pos_emb.view(1, D, n_embd) + time_emb.view(B, 1, n_embd))
+
+#         for block in self.transformer.blocks:
+#             h = block(h, attn_mask=attn_mask)
+
+#         h = self.transformer.ln_f(h)
+#         logits = self.transformer.head(h)
+
+#         return logits
+
+#     def _init_weights(self, module):
+#         if isinstance(module, nn.Linear):
+#             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+#             if module.bias is not None:
+#                 torch.nn.init.zeros_(module.bias)
+#         elif isinstance(module, nn.Embedding):
+#             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         

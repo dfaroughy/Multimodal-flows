@@ -1,14 +1,14 @@
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
-
+from tensorclass import TensorMultiModal
 
 class ContinuousSolver:
     def __init__(self, model, method='euler'):
         self.method = method
         self.model = model
 
-    def fwd_step(self, state, delta_t):
+    def fwd_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
         if state.has_continuous:
             if self.method == "euler":
                 return self.euler_step(state, delta_t)
@@ -18,17 +18,17 @@ class ContinuousSolver:
         else:
             return state
 
-    def euler_step(self, state, delta_t):
-        drift = self.model(state)
-        state.continuous += delta_t * drift
+    def euler_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
+        vt = self.model(state)
+        state.continuous += vt * delta_t 
         return state
 
-    def euler_maruyama_step(self, state, delta_t):
+    def euler_maruyama_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
         heads = self.model(state)
         diffusion = self.model.bridge_continuous.diffusion(state)
-        drift = heads.continuous
+        vt = heads.continuous
         delta_w = torch.randn_like(state.continuous)
-        state.continuous += delta_t * drift + diffusion * delta_w
+        state.continuous += delta_t * vt + diffusion * delta_w
         return state
 
 
@@ -39,7 +39,7 @@ class DiscreteSolver:
         self.model = model
         self.topk = topk
 
-    def fwd_step(self, state, delta_t, last_step):
+    def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
         if state.has_discrete:
             if self.method == "tauleap":
                 return self.tauleap_step(state, delta_t, last_step)
@@ -55,7 +55,7 @@ class DiscreteSolver:
         else:
             return state
 
-    def tauleap_step(self, state, delta_t, last_step=False):
+    def tauleap_step(self, state: TensorMultiModal, delta_t: torch.Tensor, last_step: bool=False) -> TensorMultiModal:
         """ - state.time (t): (B, 1) time tensor
             - state.discrete (k) : (B, D, 1) current state tensor
         """
@@ -80,7 +80,7 @@ class DiscreteSolver:
         return state
 
 
-    def euler_step(self, state, delta_t, last_step=False):
+    def euler_step(self, state: TensorMultiModal, delta_t: torch.Tensor, last_step: bool=False) -> TensorMultiModal:
         heads = self.model(state, batch=None) 
         rates = self.model.bridge_discrete.rate(state, heads)
 

@@ -105,7 +105,6 @@ class JetFlavorSeqGPT(L.LightningModule):
 
         return sample.detach().cpu()
  
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
 
@@ -123,7 +122,6 @@ class JetFlavorSeqGPT(L.LightningModule):
                 "strict": True,
             },
         }
-
 
     def _mask_pads(self, labels):
         """ Mask out the padding tokens in the labels.
