@@ -8,11 +8,10 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, random_split
 from transformers import GPT2Config
 
-from tensorclass import TensorMultiModal
-from datamodules.aoj import AspenOpenJets 
-from datamodules.utils import jet_set_to_seq
-from datamodules.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
-from pipeline.callbacks_generator_gpt import GPTGeneratorCallback
+from utils.tensorclass import TensorMultiModal
+from utils.aoj import AspenOpenJets 
+from utils.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
+from utils.callbacks import GPTGeneratorCallback
 from model.CFM import ConditionalFlowMatching
 
 ###############################################################################
@@ -25,12 +24,11 @@ parser.add_argument("--project", "-proj", type=str, default='jet_sequences')
 parser.add_argument("--comet_workspace", type=str, default='dfaroughy')
 parser.add_argument("--comet_api_key", type=str, default='8ONjCXJ1ogsqG1UxQzKxYn7tz')
 parser.add_argument("--experiment_id", "-id", type=str, default=None)
+
 parser.add_argument("--num_jets", "-n", type=int, default=100_000)
-parser.add_argument("--vocab_size", type=int, default=9)
-parser.add_argument("--max_num_particles", "-len", type=int, default=150)
+parser.add_argument("--num_timesteps", "-steps", type=int, default=100)
 parser.add_argument("--batch_size", "-bs", type=int, default=256)
 parser.add_argument("--tag", "-t", type=str, default='')
-
 
 config = parser.parse_args()
 
@@ -120,33 +118,28 @@ def plot_flavor_feats(sample, particle_set, path_dir=None):
 
 
 cfm = ConditionalFlowMatching.load_from_checkpoint(f"/home/df630/Multimodal-flows/jet_sequences/{config.experiment_id}/checkpoints/best.ckpt")
-print('device: ', cfm.device)
 #...dataset & dataloaders:
 
-noise = torch.randn((config.num_jets, config.max_num_particles, config.vocab_size),)
-mask = torch.ones((config.num_jets, config.max_num_particles, 1),).long()
+noise = torch.randn((config.num_jets, cfm.max_num_particles, cfm.vocab_size),)
+mask = torch.ones((config.num_jets, cfm.max_num_particles, 1),).long()
+t0 = torch.full((len(noise),), cfm.time_eps)  # (B) t_0=eps
 
-print(noise.shape, mask.shape)
-
-source = TensorMultiModal(continuous=noise, mask=mask)
+source = TensorMultiModal(time=t0, continuous=noise, mask=mask)
 source = source.to(cfm.device)
+data = DataCoupling(source=source, target=TensorMultiModal())
 
-# data = DataCoupling(source=source, target=TensorMultiModal())
 # dataset = MultiModalDataset(data)
 # predict_dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, collate_fn=data_coupling_collate_fn)
-
-#...sample from MJB model
-
 # gen_callback = GPTGeneratorCallback(config)
-
 # generator = L.Trainer(accelerator="gpu", 
 #                       devices=[0], 
 #                       callbacks=[gen_callback],
 #                       )
-
 # generator.predict(cfm, dataloaders=predict_dataloader)
 
-sample = cfm.simulate_dynamics(source).detach().cpu()
+sample = cfm.simulate_dynamics(data)
+sample = sample.target.detach().cpu()
+sample = torch.argmax(sample.continuous, dim=-1).squeeze(-1)
 
 aoj_test = AspenOpenJets(data_dir="/home/df630/Multimodal-Bridges/data/aoj", data_files="RunG_batch1.h5")
 test_data, _ = aoj_test(num_jets=config.num_jets,
@@ -155,9 +148,6 @@ test_data, _ = aoj_test(num_jets=config.num_jets,
                         pt_order=True,
                         padding='zeros')
 
-# sample = np.load(f"{config.dir}/{config.project}/{config.experiment_id}/generation_results_{config.tag}/sample.npy")
-# sample = torch.tensor(sample, dtype=torch.long)
-sample = torch.argmax(sample.continuous[-1], dim=-1).squeeze(-1)
 plot_flavor_feats(sample, 
                   test_data, 
                   path_dir=f"{config.dir}/{config.project}/{config.experiment_id}")

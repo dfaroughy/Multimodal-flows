@@ -53,7 +53,6 @@ class ConditionalFlowMatching(L.LightningModule):
 
         return {"loss": loss}
         
-
     def validation_step(self, batch: DataCoupling, batch_idx):
 
         loss = self.loss(batch)
@@ -68,7 +67,6 @@ class ConditionalFlowMatching(L.LightningModule):
                  )
 
         return {"val_loss": loss}
-
 
     def predict_step(self, batch: DataCoupling, batch_idx, dataloader_idx=0) -> TensorMultiModal:
         ''' sample generation
@@ -116,7 +114,6 @@ class ConditionalFlowMatching(L.LightningModule):
 
         return F.mse_loss(vt, ut, reduction='mean')
 
-
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
         """generate target data from source input using trained dynamics
@@ -127,11 +124,9 @@ class ConditionalFlowMatching(L.LightningModule):
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
         state = batch.source.clone()
-        state.time = torch.full((len(state), 1), self.time_eps, device=self.device)  # (B,1) t_0=eps
-        state.broadcast_time() # (B,1) -> (B,D,1)
         
         for i, t in enumerate(time_steps):
-            state.time = torch.full((len(state), 1), t.item(), device=self.device)            
+            state.time = torch.full((len(state),), t.item(), device=self.device)            
             state = solver.fwd_step(state, delta_t)
             state.broadcast_time() 
 
