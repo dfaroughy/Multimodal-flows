@@ -110,9 +110,9 @@ class ConditionalFlowMatching(L.LightningModule):
 
         # compute loss
         vt = self.model(state)
-        ut = self.bridge_continuous.conditional_drift(state, batch)
+        targets = self.bridge_continuous.conditional_drift(state, batch)
 
-        return F.mse_loss(vt, ut, reduction='mean')
+        return F.mse_loss(vt, targets, reduction='mean')
 
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 

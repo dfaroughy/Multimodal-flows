@@ -7,10 +7,14 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, random_split
 from transformers import GPT2Config
 
-from tensorclass import TensorMultiModal
-from datamodules.aoj import AspenOpenJets 
-from datamodules.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
-from model.multimodal_bridge_matching import MarkovJumpBridge
+from utils.tensorclass import TensorMultiModal
+from utils.aoj import AspenOpenJets 
+from utils.datasets import (MultiModalDataset, 
+                            DataCoupling, 
+                            data_coupling_collate_fn, 
+                            standardize)
+
+from model.MJB import MarkovJumpBridge
 
 ###############################################################################
 
@@ -31,10 +35,12 @@ parser.add_argument("--max_epochs", "-epochs", type=int, default=250)
 parser.add_argument("--train_frac", type=float, default=0.8)
 
 parser.add_argument("--vocab_size", type=int, default=9)
+parser.add_argument("--onehot", type=bool, default=False)
 parser.add_argument("--gamma", "-gam", type=float, default=0.075)
 parser.add_argument("--time_eps", "-eps", type=float, default=1e-5)
 parser.add_argument("--n_embd", type=int, default=128)
-parser.add_argument("--n_layer", type=int, default=2)
+parser.add_argument("--n_inner", type=int, default=256)
+parser.add_argument("--n_layer", type=int, default=4)
 parser.add_argument("--n_head", type=int, default=2)
 parser.add_argument("--dropout", type=float, default=0.1)
 parser.add_argument("--qk_layernorm", type=bool, default=True)
@@ -63,8 +69,10 @@ jets, _ = aoj(num_jets=config.num_jets,
               padding='zeros')
 
 jets.mask = torch.ones_like(jets.discrete)
+noise = torch.randint_like(jets.discrete, config.vocab_size)
+noise = TensorMultiModal(discrete=noise, mask=jets.mask)
 
-data = DataCoupling(source=TensorMultiModal(), target=jets)
+data = DataCoupling(source=noise, target=jets)
 dataset = MultiModalDataset(data)
 train_size = int(config.train_frac * len(dataset))
 val_size   = len(dataset) - train_size
