@@ -46,13 +46,12 @@ class FlowGeneratorCallback(Callback):
         with open(f'{self.experiment_dir}/generation_results{self.tag}/configs.yaml' , 'w' ) as outfile:
             yaml.dump( self.config.__dict__, outfile, sort_keys=False)
 
-        temp_files = self.experiment_dir.glob(f"temp_data_*.pt")
-        sample = torch.cat([torch.load(str(f)) for f in temp_files], dim=0)
-        np.save(f'{self.experiment_dir}/generation_results{self.tag}/sample.npy', sample)
-        print(f'INFO: first event: {sample[0]}')
+        temp_files = self.experiment_dir.glob(f"temp_data_*.h5")
+        sample = TensorMultiModal.cat([TensorMultiModal.load_from(str(f)) for f in temp_files], dim=0)
+        sample.save_to(f'{self.experiment_dir}/generation_results{self.tag}/generated_sample.h5')
 
     def _clean_temp_files(self):
-        for f in self.experiment_dir.glob(f"temp_data_*.pt"):
+        for f in self.experiment_dir.glob(f"temp_data_*.h5"):
             f.unlink()
 
 

@@ -76,6 +76,7 @@ class MarkovJumpBridge(L.LightningModule):
         '''
         traj = self.simulate_dynamics(batch)
         sample = traj.target
+        print(batch_idx, sample.time.shape,sample.discrete.shape)
 
         return sample.detach().cpu()
 
@@ -104,24 +105,34 @@ class MarkovJumpBridge(L.LightningModule):
         """
 
         # sample time uniformly in [eps, 1-eps], eps << 1
-        time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)
+
+        time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)  # (B,)
 
         # sample continuous state from bridge
+
         state = self.bridge_discrete.sample(time, batch)
         state = state.to(self.device)
 
         # compute loss
-        logits = self.model(state)
-        targets = batch.target.discrete.squeeze(-1).to(self.device)
 
-        return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction='mean') # (B*D,)
+        logits = self.model(state)                            
+        targets = batch.target.discrete.to(self.device)        
+        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1), reduction='none')    # (B*D,)
 
+        print("loss_ce shape:", loss_ce.shape, "logits shape:", logits.shape, "targets shape:", targets.shape)
+        loss_ce = loss_ce.view(len(batch), -1) * batch.target.mask    # (B, D)
+        print("loss_ce shape:", loss_ce.shape, "mask shape:", batch.target.mask.shape, state.mask.shape, "batch size:", len(batch), )
+
+        loss_ce = loss_ce.sum() / batch.target.mask.sum() 
+
+        return loss_ce
 
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
+        
         solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap',)
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
@@ -130,77 +141,12 @@ class MarkovJumpBridge(L.LightningModule):
         
         for i, t in enumerate(time_steps):
             is_last_step = (i == len(time_steps) - 1)
-
             state.time = torch.full((len(state),), t.item(), device=self.device)            
             state = solver.fwd_step(state, delta_t, is_last_step)
-            state.broadcast_time() 
 
         batch.target = state
 
         return batch
-
-    # def sample_bridges(self, batch: DataCoupling) -> TensorMultiModal:
-    #     """sample stochastic bridges
-    #     """
-
-    #     eps = self.time_eps  # min time resolution
-    #     t = eps + (1 - eps) * torch.rand(len(batch), device=self.device)
-    #     time = self.reshape_time_dim_like(t, batch)
-
-    #     source_tokens = torch.randint(0, self.vocab_size, (len(batch), self.max_num_particles, 1), device=self.device)
-    #     mask = torch.ones((len(batch), 
-    #                        self.max_num_particles, 1), 
-    #                        device=self.device).long()
-
-    #     batch.source = TensorMultiModal(None, None, source_tokens, mask)
-    #     noisy_tokens = self.bridge_discrete.sample(time, batch)
-
-    #     return TensorMultiModal(time, None, noisy_tokens, mask)
-
-
-    # def loss(self, logits, batch: DataCoupling) -> torch.Tensor:
-    #     """cross-entropy loss for discrete state classifier
-    #     """
-    #     targets = batch.target.discrete.squeeze(-1).to(self.device)
-    #     loss_ce = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction='mean') # (B*D,)
-    #     return loss_ce
-
-
-    # def simulate_dynamics(self, state: TensorMultiModal) -> TensorMultiModal:
-    #     """generate target data from source input using trained dynamics
-    #     returns the final state of the bridge at the end of the time interval
-    #     """
-    #     eps = self.time_eps  # min time resolution
-    #     state.time = torch.full((len(state), 1), eps, device=self.device)  # (B,1) t_0=eps
-    #     state.broadcast_time() # (B,1) -> (B,D,1)
-    #     steps = self.num_timesteps
-
-    #     time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
-    #     delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
-
-    #     solver_discrete = DiscreteSolver(model=self,
-    #                                      vocab_size=self.vocab_size, 
-    #                                      method='tauleap',
-    #                                      )
-
-    #     paths = [state.clone()]  # append t=0 source
-
-    #     for i, t in enumerate(time_steps):
-    #         is_last_step = (i == len(time_steps) - 1)
-
-    #         state.time = torch.full((len(state), 1), t.item(), device=self.device)            
-    #         state = solver_discrete.fwd_step(state, delta_t, is_last_step)
-    #         state.broadcast_time() 
-                        
-    #         if isinstance(self.path_snapshots_idx, list):
-    #             for i in self.path_history_idx:
-    #                 paths.append(state.clone())
-
-    #     paths.append(state)  # append t=1 generated target
-    #     paths = TensorMultiModal.stack(paths, dim=0)
-    #     return paths
-
-
 
 
 class RandomTelegraphBridge:
@@ -226,10 +172,11 @@ class RandomTelegraphBridge:
             - rates: (B, D, vocab_size) transition rates tensor
 
         """
-        
-        t = state.time
+
+        t = state.time.unsqueeze(1)
         k = state.discrete
 
+        assert t.shape == (len(state), 1)
         assert (k >= 0).all() and (k < self.vocab_size).all(), (
             "Values in `k` outside of bound! k_min={}, k_max={}".format(
                 k.min(), k.max()

@@ -112,7 +112,11 @@ class ConditionalFlowMatching(L.LightningModule):
         vt = self.model(state)
         targets = self.bridge_continuous.conditional_drift(state, batch)
 
-        return F.mse_loss(vt, targets, reduction='mean')
+        loss_mse =  F.mse_loss(vt, targets, reduction='none')
+        loss_mse = loss_mse * batch.target.mask    
+        loss_mse = loss_mse.sum() / batch.target.mask.sum()
+
+        return loss_mse
 
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
@@ -128,7 +132,6 @@ class ConditionalFlowMatching(L.LightningModule):
         for i, t in enumerate(time_steps):
             state.time = torch.full((len(state),), t.item(), device=self.device)            
             state = solver.fwd_step(state, delta_t)
-            state.broadcast_time() 
 
         batch.target = state
 
@@ -181,38 +184,38 @@ class UniformFlow:
             return t.reshape(-1, *([1] * (state.ndim - 1)))
 
 
-class SchrodingerBridge:
-    """ Schrodinger bridge for continuous states
-        notation:
-        - t: time
-        - x0: continuous source state at t=0
-        - x1: continuous  target state at t=1
-        - x: continuous state at time t
-        - z: noise
-    """
+# class SchrodingerBridge:
+#     """ Schrodinger bridge for continuous states
+#         notation:
+#         - t: time
+#         - x0: continuous source state at t=0
+#         - x1: continuous  target state at t=1
+#         - x: continuous state at time t
+#         - z: noise
+#     """
 
-    def __init__(self, sigma):
-        self.sigma = sigma
+#     def __init__(self, sigma):
+#         self.sigma = sigma
 
-    def sample(self, t, batch: DataCoupling):
-        x0 = batch.source.continuous
-        x1 = batch.target.continuous
-        x = t * x1 + (1.0 - t) * x0
-        z = torch.randn_like(x)
-        std = self.sigma * torch.sqrt(t * (1.0 - t))
-        return x + std * z
+#     def sample(self, t, batch: DataCoupling):
+#         x0 = batch.source.continuous
+#         x1 = batch.target.continuous
+#         x = t * x1 + (1.0 - t) * x0
+#         z = torch.randn_like(x)
+#         std = self.sigma * torch.sqrt(t * (1.0 - t))
+#         return x + std * z
 
-    def drift(self, state: TensorMultiModal, batch: DataCoupling):
-        x0 = batch.source.continuous
-        x1 = batch.target.continuous
-        xt = state.continuous
-        t = state.time
-        A = (1 - 2 * t) / (t * (1 - t))
-        B = t**2 / (t * (1 - t))
-        C = -1 * (1 - t) ** 2 / (t * (1 - t))
-        return A * xt + B * x1 + C * x0
+#     def drift(self, state: TensorMultiModal, batch: DataCoupling):
+#         x0 = batch.source.continuous
+#         x1 = batch.target.continuous
+#         xt = state.continuous
+#         t = state.time
+#         A = (1 - 2 * t) / (t * (1 - t))
+#         B = t**2 / (t * (1 - t))
+#         C = -1 * (1 - t) ** 2 / (t * (1 - t))
+#         return A * xt + B * x1 + C * x0
 
-    def diffusion(self, state: TensorMultiModal):
-        state.broadcast_time()
-        t = state.time
-        return self.sigma * torch.sqrt(t * (1.0 - t))
+#     def diffusion(self, state: TensorMultiModal):
+#         state.broadcast_time()
+#         t = state.time
+#         return self.sigma * torch.sqrt(t * (1.0 - t))

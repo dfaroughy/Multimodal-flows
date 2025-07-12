@@ -1,7 +1,7 @@
 
 import torch
 from torch import nn
-from torch.nn import CrossEntropyLoss
+import math
 from torch.nn import functional as F
 
 
@@ -16,23 +16,6 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
-class Conv1D(nn.Module):
-    def __init__(self, nf, nx):
-        """ Conv1D layer as defined by Radford et al. for OpenAI GPT (and also used in GPT-2)
-            Basically works like a Linear layer but the weights are transposed
-        """
-        super().__init__()
-        self.nf = nf
-        w = torch.empty(nx, nf)
-        nn.init.normal_(w, std=0.02)
-        self.weight = nn.Parameter(w)
-        self.bias = nn.Parameter(torch.zeros(nf))
-
-    def forward(self, x):
-        size_out = x.size()[:-1] + (self.nf,)
-        x = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
-        x = x.view(*size_out)
-        return x
 
 class SelfAttention(nn.Module):
     def __init__(self, config):

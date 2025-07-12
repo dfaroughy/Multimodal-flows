@@ -63,6 +63,8 @@ class DiscreteSolver:
 
         logits = self.model(state)        # (B, D, vocab_size)
         rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
+
+        assert rates.shape == logits.shape, "Rates and logits must have the same shape."
         state.discrete = state.discrete.squeeze(-1)
 
         delta_n = torch.poisson(rates * delta_t).to(state.time.device)  # all jumps

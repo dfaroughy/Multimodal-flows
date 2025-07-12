@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from dataclasses import dataclass
 
 from utils.tensorclass import TensorMultiModal
-from utils.models import Conv1D, LayerNorm, SelfAttention, transformer_timestep_embedding
+from utils.models import LayerNorm, SelfAttention, transformer_timestep_embedding
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -78,17 +78,19 @@ class FlavorFormer(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, n_state, config): 
+    def __init__(self, config):
         super().__init__()
-        self.c_fc = Conv1D(config.n_embd, config.n_inner)
-        self.c_proj = Conv1D(config.n_inner , config.n_embd)
-        self.act = nn.GELU()
+        self.c_fc    = nn.Linear(config.n_embd, config.n_inner, bias=config.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(config.n_inner , config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        h = self.act(self.c_fc(x))
-        h2 = self.c_proj(h)
-        return self.dropout(h2)
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
 
 
 class Block(nn.Module):
