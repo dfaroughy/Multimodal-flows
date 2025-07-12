@@ -31,7 +31,7 @@ class MarkovJumpBridge(L.LightningModule):
         self.path_snapshots_idx = False
 
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
+        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat, config.temperature)        
         self.model = FlavorFormer(config)
         
         self.save_hyperparameters()
