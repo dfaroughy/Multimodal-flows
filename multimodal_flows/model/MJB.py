@@ -117,6 +117,28 @@ class MarkovJumpBridge(L.LightningModule):
         return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction='mean') # (B*D,)
 
 
+    def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
+
+        """generate target data from source input using trained dynamics
+        returns the final state of the bridge at the end of the time interval
+        """
+        solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap',)
+        time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
+        delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
+
+        state = batch.source.clone()
+        
+        for i, t in enumerate(time_steps):
+            is_last_step = (i == len(time_steps) - 1)
+
+            state.time = torch.full((len(state),), t.item(), device=self.device)            
+            state = solver.fwd_step(state, delta_t, is_last_step)
+            state.broadcast_time() 
+
+        batch.target = state
+
+        return batch
+
     # def sample_bridges(self, batch: DataCoupling) -> TensorMultiModal:
     #     """sample stochastic bridges
     #     """
@@ -144,39 +166,39 @@ class MarkovJumpBridge(L.LightningModule):
     #     return loss_ce
 
 
-    def simulate_dynamics(self, state: TensorMultiModal) -> TensorMultiModal:
-        """generate target data from source input using trained dynamics
-        returns the final state of the bridge at the end of the time interval
-        """
-        eps = self.time_eps  # min time resolution
-        state.time = torch.full((len(state), 1), eps, device=self.device)  # (B,1) t_0=eps
-        state.broadcast_time() # (B,1) -> (B,D,1)
-        steps = self.num_timesteps
+    # def simulate_dynamics(self, state: TensorMultiModal) -> TensorMultiModal:
+    #     """generate target data from source input using trained dynamics
+    #     returns the final state of the bridge at the end of the time interval
+    #     """
+    #     eps = self.time_eps  # min time resolution
+    #     state.time = torch.full((len(state), 1), eps, device=self.device)  # (B,1) t_0=eps
+    #     state.broadcast_time() # (B,1) -> (B,D,1)
+    #     steps = self.num_timesteps
 
-        time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
-        delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
+    #     time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
+    #     delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
-        solver_discrete = DiscreteSolver(model=self,
-                                         vocab_size=self.vocab_size, 
-                                         method='tauleap',
-                                         )
+    #     solver_discrete = DiscreteSolver(model=self,
+    #                                      vocab_size=self.vocab_size, 
+    #                                      method='tauleap',
+    #                                      )
 
-        paths = [state.clone()]  # append t=0 source
+    #     paths = [state.clone()]  # append t=0 source
 
-        for i, t in enumerate(time_steps):
-            is_last_step = (i == len(time_steps) - 1)
+    #     for i, t in enumerate(time_steps):
+    #         is_last_step = (i == len(time_steps) - 1)
 
-            state.time = torch.full((len(state), 1), t.item(), device=self.device)            
-            state = solver_discrete.fwd_step(state, delta_t, is_last_step)
-            state.broadcast_time() 
+    #         state.time = torch.full((len(state), 1), t.item(), device=self.device)            
+    #         state = solver_discrete.fwd_step(state, delta_t, is_last_step)
+    #         state.broadcast_time() 
                         
-            if isinstance(self.path_snapshots_idx, list):
-                for i in self.path_history_idx:
-                    paths.append(state.clone())
+    #         if isinstance(self.path_snapshots_idx, list):
+    #             for i in self.path_history_idx:
+    #                 paths.append(state.clone())
 
-        paths.append(state)  # append t=1 generated target
-        paths = TensorMultiModal.stack(paths, dim=0)
-        return paths
+    #     paths.append(state)  # append t=1 generated target
+    #     paths = TensorMultiModal.stack(paths, dim=0)
+    #     return paths
 
 
 

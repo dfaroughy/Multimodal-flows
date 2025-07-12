@@ -61,9 +61,8 @@ class DiscreteSolver:
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        logits = self.model(state)        
-        rates = self.model.bridge_discrete.rate(state, logits)
-
+        logits = self.model(state)        # (B, D, vocab_size)
+        rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
         state.discrete = state.discrete.squeeze(-1)
 
         delta_n = torch.poisson(rates * delta_t).to(state.time.device)  # all jumps

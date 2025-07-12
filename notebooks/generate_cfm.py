@@ -116,8 +116,10 @@ def plot_flavor_feats(sample, particle_set, path_dir=None):
 
     plt.savefig(f'{path_dir}/jet_flavor_high_level.png', dpi=500, bbox_inches='tight')
 
+###############################################################################
 
 cfm = ConditionalFlowMatching.load_from_checkpoint(f"/home/df630/Multimodal-flows/jet_sequences/{config.experiment_id}/checkpoints/best.ckpt")
+
 #...dataset & dataloaders:
 
 noise = torch.randn((config.num_jets, cfm.max_num_particles, cfm.vocab_size),)
@@ -128,14 +130,7 @@ source = TensorMultiModal(time=t0, continuous=noise, mask=mask)
 source = source.to(cfm.device)
 data = DataCoupling(source=source, target=TensorMultiModal())
 
-# dataset = MultiModalDataset(data)
-# predict_dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, collate_fn=data_coupling_collate_fn)
-# gen_callback = GPTGeneratorCallback(config)
-# generator = L.Trainer(accelerator="gpu", 
-#                       devices=[0], 
-#                       callbacks=[gen_callback],
-#                       )
-# generator.predict(cfm, dataloaders=predict_dataloader)
+#...sample dynamics:
 
 sample = cfm.simulate_dynamics(data)
 sample = sample.target.detach().cpu()
