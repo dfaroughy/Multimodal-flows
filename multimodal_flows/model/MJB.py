@@ -118,12 +118,8 @@ class MarkovJumpBridge(L.LightningModule):
         logits = self.model(state)                            
         targets = batch.target.discrete.to(self.device)        
         loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1), reduction='none')    # (B*D,)
-
-        print("loss_ce shape:", loss_ce.shape, "logits shape:", logits.shape, "targets shape:", targets.shape)
-        loss_ce = loss_ce.view(len(batch), -1) * batch.target.mask    # (B, D)
-        print("loss_ce shape:", loss_ce.shape, "mask shape:", batch.target.mask.shape, state.mask.shape, "batch size:", len(batch), )
-
-        loss_ce = loss_ce.sum() / batch.target.mask.sum() 
+        loss_ce = loss_ce.view(len(batch), -1) * state.mask    # (B, D)
+        loss_ce = loss_ce.sum() / state.mask.sum() 
 
         return loss_ce
 
@@ -157,10 +153,11 @@ class RandomTelegraphBridge:
     - k: discrete state at time t
     """
 
-    def __init__(self, gamma, vocab_size, thermostat_fn):
+    def __init__(self, gamma, vocab_size, thermostat_fn, temperature=1.0):
         self.gamma = gamma
         self.vocab_size = vocab_size
         self.thermostat = thermostat_fn
+        self.temperature = temperature
 
     def rate(self, state: TensorMultiModal, logits: torch.Tensor):
         """ input:
@@ -182,6 +179,9 @@ class RandomTelegraphBridge:
                 k.min(), k.max()
             )
         )
+
+        if self.temperature != 1.0:
+            logits = logits / self.temperature
 
         qx = softmax(logits, dim=2) # transition probabilities to all states
         qy = torch.gather(qx, 2, k.long())  # current state prob
