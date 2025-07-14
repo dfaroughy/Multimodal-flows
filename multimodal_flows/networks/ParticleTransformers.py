@@ -31,16 +31,20 @@ class ParticleFormer(nn.Module):
         self.transformer = nn.ModuleDict(dict(
             wxe = nn.Linear(config.dim_continuous, config.n_embd),
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.max_num_particles, config.n_embd),
             drop = nn.Dropout(config.dropout),
             blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer_kin)]),
             blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer_flavor)]),
             blocks_fused = nn.ModuleList([Block(config, 'cross') for _ in range(config.n_layer_fused)]),
             ln_k = LayerNorm(config.n_embd, bias=config.bias),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
-            ln_final = LayerNorm(config.n_embd, bias=config.bias), # final layer norm
-            head_kin = nn.Linear(config.n_embd, config.dim_continuous, bias=config.bias), # regressor head for continuous feats
-            head_flv = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias), # classifier head for discrete tokens
+            proj_fused = nn.ModuleList([nn.Linear(2 * config.n_embd, config.n_inner, bias=config.bias),
+                                        LayerNorm(config.n_inner, bias=config.bias)]), # fused output layer norm and projection
+            head_kin = nn.ModuleList([nn.Linear(config.n_inner, config.n_embd, bias=config.bias),
+                                      nn.GELU(),
+                                      nn.Linear(config.n_embd, config.dim_continuous, bias=config.bias)]), # regressor head for continuous feats
+            head_flv = nn.ModuleList([nn.Linear(config.n_inner, config.n_embd, bias=config.bias), 
+                                      nn.GELU(),
+                                      nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)]) # classifier head for discrete tokens
         ))
 
         self.apply(self._init_weights)
@@ -57,28 +61,31 @@ class ParticleFormer(nn.Module):
         
         B, D = state.shape
         pos = torch.arange(0, D, dtype=torch.long, device=state.time.device)    # shape (D)
+        att_mask = state.mask.bool() 
 
         # initial embeddings
-        flv_emb = self.transformer.wte(state.discrete)                          # token embeddings of shape (B, D, n_embd)
+        flv_emb = self.transformer.wte(state.discrete)                         # token embeddings of shape (B, D, n_embd)
         kin_emb = self.transformer.wxe(state.continuous)                       # feature embeddings of shape (B, D, n_embd)
-        pos_emb = self.transformer.wpe(pos)                                     # position embeddings of shape (D, n_embd)
-        time_emb = transformer_timestep_embedding(state.time, self.n_embd)      # time embedding of shape (B, n_embd)
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)     # time embedding of shape (B, n_embd)
 
-        f = self.transformer.drop(flv_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
-        k = self.transformer.drop(kin_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
+        f = self.transformer.drop(flv_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
+        k = self.transformer.drop(kin_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
 
         f_skip = f.clone()  # skip connection for final layer norm  
         k_skip = k.clone()  # skip connection for final layer norm
+        comb_skip = torch.cat([k_skip, f_skip], dim=-1)  # skip connection for final layer norm
 
         # encoder blocks
 
         for block in self.transformer.kin_blocks:
-            k = block(f, attn_mask=None)
-            k += flv_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
+
+            k = block(f, attn_mask=att_mask)
+            k += time_emb.view(B, 1, self.n_embd)
 
         for block in self.transformer.flv_blocks:
-            f = block(k, attn_mask=None)
-            f += kin_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
+
+            f = block(k, attn_mask=att_mask)
+            f += time_emb.view(B, 1, self.n_embd)
 
         k = self.transformer.ln_kin(k + k_skip)
         f = self.transformer.ln_flv(f + f_skip)
@@ -89,14 +96,15 @@ class ParticleFormer(nn.Module):
         # fused blocks
 
         for block in self.transformer.blocks_fused:
-            h = block(h, attn_mask=None)
-            h += pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
 
-        h = self.transformer.ln_final(h + h_skip)
+            h = block(h, attn_mask=att_mask)
+            h += comb_skip + time_emb.view(B, 1, self.n_embd)
+
+        h = self.transformer.proj_fused(h + h_skip)
         h1, h2 = torch.split(h, [self.n_embd, self.n_embd], dim=-1)
 
-        h_kin = self.transformer.head_kin(h1 + kin_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)) # regressor head for continuous feats
-        h_flv = self.transformer.head_flv(h2 + flv_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)) # classifier head for discrete tokens
+        h_kin = self.transformer.head_kin(h1 + k_skip) # regressor head for continuous feats
+        h_flv = self.transformer.head_flv(h2 + f_skip) # classifier head for discrete tokens
 
         return h_kin, h_flv
 
