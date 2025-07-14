@@ -34,11 +34,12 @@ class ContinuousSolver:
 
 
 class DiscreteSolver:
-    def __init__(self, model, vocab_size, method='tauleap', topk=None):
+    def __init__(self, model, vocab_size, method='tauleap', topk=None, temperature=1.0):
         self.method = method
         self.vocab_size = vocab_size
         self.model = model
         self.topk = topk
+        self.temperature = temperature
 
     def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
         if state.has_discrete:
@@ -61,7 +62,7 @@ class DiscreteSolver:
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        logits = self.model(state)        # (B, D, vocab_size)
+        logits = self.model(state) / self.temperature        # (B, D, vocab_size)
         rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."

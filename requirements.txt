@@ -21,3 +21,4 @@ h5py
 fastjet
 seaborn
 rich
+optuna
