@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from pytorch_lightning.callbacks import Callback
-from lightning.pytorch.utilities import rank_zero_only
+from pytorch_lightning.utilities import rank_zero_only
 
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
@@ -36,7 +36,7 @@ class FlowGeneratorCallback(Callback):
 
     def _save_results_local(self, rank):
         data = TensorMultiModal.cat(self.batched_data, dim=0)
-        data.save_to(f"{self.experiment_dir}/temp_data_{rank}.h5")
+        data.save_to(f"{self.experiment_dir}/temp_data{self.tag}_{rank}.h5")
 
     @rank_zero_only
     def _gather_results_global(self, trainer):
@@ -46,12 +46,12 @@ class FlowGeneratorCallback(Callback):
         with open(f'{self.experiment_dir}/generation_results{self.tag}/configs.yaml' , 'w' ) as outfile:
             yaml.dump( self.config.__dict__, outfile, sort_keys=False)
 
-        temp_files = self.experiment_dir.glob(f"temp_data_*.h5")
+        temp_files = self.experiment_dir.glob(f"temp_data{self.tag}_*.h5")
         sample = TensorMultiModal.cat([TensorMultiModal.load_from(str(f)) for f in temp_files], dim=0)
         sample.save_to(f'{self.experiment_dir}/generation_results{self.tag}/generated_sample.h5')
 
     def _clean_temp_files(self):
-        for f in self.experiment_dir.glob(f"temp_data_*.h5"):
+        for f in self.experiment_dir.glob(f"temp_data{self.tag}_*.h5"):
             f.unlink()
 
 

@@ -2,8 +2,6 @@ import torch
 from dataclasses import dataclass
 from collections import namedtuple
 from torch.utils.data import Dataset
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from utils.tensorclass import TensorMultiModal
 
@@ -154,6 +152,20 @@ def data_coupling_collate_fn(batch: namedtuple) -> DataCoupling:
     return DataCoupling(source, target, context)
 
 
+def standardize(jets, config):
+    """
+    Standardizes the continuous features of the jets.
+    Args:
+        jets (TensorMultiModal): The jets data.
+        config: Configuration object containing vocab_size.
+    Returns:
+        TensorMultiModal: The standardized jets data.
+    """
+    config.mean = jets.continuous.float().view(-1, config.vocab_size).mean(dim=0)
+    config.std = jets.continuous.float().view(-1, config.vocab_size).std(dim=0)
+    jets.continuous = (jets.continuous - config.mean) / config.std 
+    
+
 def jet_set_to_seq(part_set: TensorMultiModal, vocab_size: int):
     """Convert a particle set to a sequence with start, end and pad tokens.
     
@@ -194,95 +206,3 @@ def jet_set_to_seq(part_set: TensorMultiModal, vocab_size: int):
 
     return particle_set
 
-
-def standardize(jets, config):
-    """
-    Standardizes the continuous features of the jets.
-    Args:
-        jets (TensorMultiModal): The jets data.
-        config: Configuration object containing vocab_size.
-    Returns:
-        TensorMultiModal: The standardized jets data.
-    """
-    config.mean = jets.continuous.float().view(-1, config.vocab_size).mean(dim=0)
-    config.std = jets.continuous.float().view(-1, config.vocab_size).std(dim=0)
-    jets.continuous = (jets.continuous - config.mean) / config.std 
-
-def plot_flavor_feats(sample, particle_set, path_dir=None):
-
-    #...Low-level feats
-
-    fig, ax = plt.subplots(2, 4, figsize=(10,3.5))
-
-    sns.histplot((particle_set.discrete == 1).sum(dim=1), discrete=True, stat="density", element="step", fill=True, ax=ax[0, 0], lw=0.0)
-    sns.histplot((sample == 1).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 0], lw=0.75)
-    ax[0, 0].set_xlabel(r"$N_{\gamma}$")
-
-    sns.histplot((particle_set.discrete == 2).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[0, 1],lw=0.0)
-    sns.histplot((sample == 2).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 1],lw=0.75)
-    ax[0, 1].set_xlabel(r"$N_{h^0}$")
-
-    sns.histplot((particle_set.discrete == 3).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[0, 2],lw=0.0)
-    sns.histplot((sample == 3).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 2],lw=0.75)
-    ax[0, 2].set_xlabel(r"$N_{h^{-}}$")
-
-    sns.histplot((particle_set.discrete == 4).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[0, 3],lw=0.0)
-    sns.histplot((sample == 4).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 3],lw=0.75)
-    ax[0, 3].set_xlabel(r"$N_{h^{+}}$")
-
-    sns.histplot((particle_set.discrete == 5).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 0],lw=0.0)
-    sns.histplot((sample == 5).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 0],lw=0.75)
-    ax[1, 0].set_xlabel(r"$N_{e^{-}}$")
-
-    sns.histplot((particle_set.discrete == 6).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 1],lw=0.0)
-    sns.histplot((sample == 6).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 1],lw=0.75)
-    ax[1, 1].set_xlabel(r"$N_{e^{+}}$")
-
-    sns.histplot((particle_set.discrete == 7).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 2],lw=0.0)
-    sns.histplot((sample == 7).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 2],lw=0.75)
-    ax[1, 2].set_xlabel(r"$N_{\mu^{-}}$")
-
-    sns.histplot((particle_set.discrete == 8).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 3],lw=0.0)
-    sns.histplot((sample == 8).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 3],lw=0.75)
-    ax[1, 3].set_xlabel(r"$N_{\mu^{+}}$")
-
-    plt.tight_layout()
-    for a in ax.flatten():
-        a.legend([], [], frameon=False)
-
-    plt.savefig(f'{path_dir}/jet_flavor_low_level.png', dpi=500, bbox_inches='tight')
-
-    #...High-level feats
-
-    fig, ax = plt.subplots(2, 3, figsize=(8,3.5))
-
-    sns.histplot((particle_set.discrete > 0).sum(dim=1), discrete=True, stat="density", element="step", fill=True, ax=ax[0, 0], lw=0.0)
-    sns.histplot((sample > 0).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 0], lw=0.75)
-    ax[0, 0].set_xlabel(r"$N$")
-
-    sns.histplot(((particle_set.discrete > 1) & (particle_set.discrete < 5)).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[0, 1],lw=0.0)
-    sns.histplot(((sample > 1) & (sample < 5)).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 1],lw=0.75)
-    ax[0, 1].set_xlabel(r"$N_{\rm had}$")
-
-    sns.histplot((particle_set.discrete > 4).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[0, 2],lw=0.0)
-    sns.histplot((sample > 4).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[0, 2],lw=0.75)
-    ax[0, 2].set_xlabel(r"$N_{\rm lep}$")
-
-    sns.histplot(((particle_set.discrete == 1) | (particle_set.discrete == 2)).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 0],lw=0.0)
-    sns.histplot(((sample == 1) | (sample == 2)).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 0],lw=0.75)
-    ax[1, 0].set_xlabel(r"$N_{0}$")
-
-    sns.histplot(((particle_set.discrete == 3) | (particle_set.discrete == 5) | (particle_set.discrete == 7)).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 1],lw=0.0)
-    sns.histplot(((sample == 3) | (sample == 5) | (sample == 7)).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 1],lw=0.75)
-    ax[1, 1].set_xlabel(r"$N_{-}$")
-
-    sns.histplot(((particle_set.discrete == 4) | (particle_set.discrete == 6) | (particle_set.discrete == 8)).sum(dim=1), discrete=True, stat="density",element="step", fill=True, ax=ax[1, 2],lw=0.0)
-    sns.histplot(((sample == 4) | (sample == 6) | (sample == 8)).sum(dim=1), discrete=True, stat="density",element="step", fill=False, ax=ax[1, 2],lw=0.75)
-    ax[1, 2].set_xlabel(r"$N_{+}$")
-
-
-    plt.tight_layout()
-    for a in ax.flatten():
-        a.legend([], [], frameon=False)
-
-    plt.savefig(f'{path_dir}/jet_flavor_high_level.png', dpi=500, bbox_inches='tight')

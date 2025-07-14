@@ -5,6 +5,12 @@ from pathlib import Path
 import torch.distributed as dist
 
 
+def get_rank():
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl", init_method="env://")
+    return dist.get_rank()
+
+
 class SimpleLogger:
     @staticmethod
     def info(message, condition=True):

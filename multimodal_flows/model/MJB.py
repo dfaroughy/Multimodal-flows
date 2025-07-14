@@ -27,11 +27,13 @@ class MarkovJumpBridge(L.LightningModule):
         self.lr=config.lr
         self.max_epochs=config.max_epochs
         self.time_eps=config.time_eps
-        self.num_timesteps = config.num_timesteps if hasattr(config, 'num_timesteps') else 100
+        self.temperature = config.temperature
+        self.num_timesteps = config.num_timesteps
         self.path_snapshots_idx = False
 
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat, config.temperature)        
+        
+        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat, self.temperature)        
         self.model = FlavorFormer(config)
         
         self.save_hyperparameters()
@@ -76,16 +78,15 @@ class MarkovJumpBridge(L.LightningModule):
         '''
         traj = self.simulate_dynamics(batch)
         sample = traj.target
-        print(batch_idx, sample.time.shape,sample.discrete.shape)
-
         return sample.detach().cpu()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.max_epochs,    # full cycle length
-            eta_min=self.lr_final             # final LR
+            T_max=self.max_epochs,  # full cycle length
+            eta_min=self.lr_final,  # final LR
+            last_epoch=-1,         
         )
         return {
             "optimizer": optimizer,
@@ -99,7 +100,7 @@ class MarkovJumpBridge(L.LightningModule):
 
     # ...Model functions
 
-    def loss(self, batch: DataCoupling) -> TensorMultiModal:
+    def loss(self, batch: DataCoupling) -> torch.Tensor:
 
         """ Markov bridge CE loss
         """
@@ -129,7 +130,7 @@ class MarkovJumpBridge(L.LightningModule):
         returns the final state of the bridge at the end of the time interval
         """
         
-        solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap',)
+        solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap', temperature=self.temperature)
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
@@ -179,9 +180,6 @@ class RandomTelegraphBridge:
                 k.min(), k.max()
             )
         )
-
-        if self.temperature != 1.0:
-            logits = logits / self.temperature
 
         qx = softmax(logits, dim=2) # transition probabilities to all states
         qy = torch.gather(qx, 2, k.long())  # current state prob

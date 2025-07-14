@@ -35,7 +35,7 @@ class ConditionalFlowMatching(L.LightningModule):
 
     # ...Lightning functions
 
-    def forward(self, state: TensorMultiModal) -> TensorMultiModal:
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
         return self.model(state)
         
     def training_step(self, batch: DataCoupling, batch_idx):
@@ -82,7 +82,8 @@ class ConditionalFlowMatching(L.LightningModule):
         scheduler = CosineAnnealingLR(
             optimizer,
             T_max=self.max_epochs,    # full cycle length
-            eta_min=self.lr_final             # final LR
+            eta_min=self.lr_final,    # final LR
+            last_epoch=-1,
         )
         return {
             "optimizer": optimizer,
@@ -182,40 +183,3 @@ class UniformFlow:
             return t
         else:
             return t.reshape(-1, *([1] * (state.ndim - 1)))
-
-
-# class SchrodingerBridge:
-#     """ Schrodinger bridge for continuous states
-#         notation:
-#         - t: time
-#         - x0: continuous source state at t=0
-#         - x1: continuous  target state at t=1
-#         - x: continuous state at time t
-#         - z: noise
-#     """
-
-#     def __init__(self, sigma):
-#         self.sigma = sigma
-
-#     def sample(self, t, batch: DataCoupling):
-#         x0 = batch.source.continuous
-#         x1 = batch.target.continuous
-#         x = t * x1 + (1.0 - t) * x0
-#         z = torch.randn_like(x)
-#         std = self.sigma * torch.sqrt(t * (1.0 - t))
-#         return x + std * z
-
-#     def drift(self, state: TensorMultiModal, batch: DataCoupling):
-#         x0 = batch.source.continuous
-#         x1 = batch.target.continuous
-#         xt = state.continuous
-#         t = state.time
-#         A = (1 - 2 * t) / (t * (1 - t))
-#         B = t**2 / (t * (1 - t))
-#         C = -1 * (1 - t) ** 2 / (t * (1 - t))
-#         return A * xt + B * x1 + C * x0
-
-#     def diffusion(self, state: TensorMultiModal):
-#         state.broadcast_time()
-#         t = state.time
-#         return self.sigma * torch.sqrt(t * (1.0 - t))
