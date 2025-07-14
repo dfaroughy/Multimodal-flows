@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from dataclasses import dataclass
 
 from utils.tensorclass import TensorMultiModal
-from utils.models import LayerNorm, SelfAttention, transformer_timestep_embedding
+from utils.models import LayerNorm, SelfAttention, CrossAttention, transformer_timestep_embedding
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -16,6 +16,100 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 2) huggingface/transformers PyTorch implementation:
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
+
+
+class ParticleFormer(nn.Module):
+
+    def __init__(self, config):
+        """
+        config.vocab_size should include a mask token 
+        """
+        super().__init__()
+
+        self.n_embd = config.n_embd
+
+        self.transformer = nn.ModuleDict(dict(
+            wxe = nn.Linear(config.dim_continuous, config.n_embd),
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.max_num_particles, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer_kin)]),
+            blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer_flavor)]),
+            blocks_fused = nn.ModuleList([Block(config, 'cross') for _ in range(config.n_layer_fused)]),
+            ln_k = LayerNorm(config.n_embd, bias=config.bias),
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ln_final = LayerNorm(config.n_embd, bias=config.bias), # final layer norm
+            head_kin = nn.Linear(config.n_embd, config.dim_continuous, bias=config.bias), # regressor head for continuous feats
+            head_flv = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias), # classifier head for discrete tokens
+        ))
+
+        self.apply(self._init_weights)
+
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+    def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
+        """
+            state.continuous is the corrupted state (B, D, 1) or (B, D, vocab_size) if onehot is True
+            state.time is the time in the corruption process (B,)
+        """
+        
+        B, D = state.shape
+        pos = torch.arange(0, D, dtype=torch.long, device=state.time.device)    # shape (D)
+
+        # initial embeddings
+        flv_emb = self.transformer.wte(state.discrete)                          # token embeddings of shape (B, D, n_embd)
+        kin_emb = self.transformer.wxe(state.continuous)                       # feature embeddings of shape (B, D, n_embd)
+        pos_emb = self.transformer.wpe(pos)                                     # position embeddings of shape (D, n_embd)
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)      # time embedding of shape (B, n_embd)
+
+        f = self.transformer.drop(flv_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
+        k = self.transformer.drop(kin_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
+
+        f_skip = f.clone()  # skip connection for final layer norm  
+        k_skip = k.clone()  # skip connection for final layer norm
+
+        # encoder blocks
+
+        for block in self.transformer.kin_blocks:
+            k = block(f, attn_mask=None)
+            k += flv_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
+
+        for block in self.transformer.flv_blocks:
+            f = block(k, attn_mask=None)
+            f += kin_emb.view(B, D, self.n_embd) + pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
+
+        k = self.transformer.ln_kin(k + k_skip)
+        f = self.transformer.ln_flv(f + f_skip)
+
+        h = torch.cat([k, f], dim=-1)  # concatenate the two embeddings (B, D, 2*n_embd)
+        h_skip = h.clone()             # skip connection for final layer norm
+       
+        # fused blocks
+
+        for block in self.transformer.blocks_fused:
+            h = block(h, attn_mask=None)
+            h += pos_emb.view(1, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)
+
+        h = self.transformer.ln_final(h + h_skip)
+        h1, h2 = torch.split(h, [self.n_embd, self.n_embd], dim=-1)
+
+        h_kin = self.transformer.head_kin(h1 + kin_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)) # regressor head for continuous feats
+        h_flv = self.transformer.head_flv(h2 + flv_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd)) # classifier head for discrete tokens
+
+        return h_kin, h_flv
+
+    def _init_weights(self, module):
+
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
 
 class FlavorFormer(nn.Module):
 
@@ -49,7 +143,7 @@ class FlavorFormer(nn.Module):
         """
         
         B, D = state.shape
-        inputs = state.continuous if state.has_continuous else state.discrete
+        inputs = state.discrete if state.has_discrete else state.continuous
 
         pos = torch.arange(0, D, dtype=torch.long, device=state.time.device)    # shape (D)
         tok_emb = self.transformer.wte(inputs)                                  # token embeddings of shape (B, D, n_embd)
