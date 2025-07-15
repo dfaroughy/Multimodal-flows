@@ -7,8 +7,8 @@ from torch.nn.functional import softmax
 from torch.distributions import Categorical
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from models.CFM import UniformFlow
-from models.MJB import RandomTelegraphBridge
+from model.CFM import UniformFlow
+from model.MJB import RandomTelegraphBridge
 
 from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
@@ -22,20 +22,21 @@ class MultiModalFlowBridge(L.LightningModule):
                  
         super().__init__()
 
-        self.dim_continuous=config.dim_continuous
-        self.vocab_size=config.vocab_size
-        self.num_jets=config.num_jets
-        self.max_num_particles=config.max_num_particles
+        self.dim_continuous = config.dim_continuous
+        self.vocab_size = config.vocab_size
+        self.num_jets = config.num_jets
+        self.max_num_particles = config.max_num_particles
 
-        self.max_epochs=config.max_epochs
-        self.time_eps=config.time_eps
+        self.max_epochs = config.max_epochs
+        self.time_eps = config.time_eps
         self.temperature = config.temperature
         self.num_timesteps = config.num_timesteps
-        self.lr_final=config.lr_final
-        self.lr=config.lr
+        self.lr_final = config.lr_final
+        self.lr = config.lr
 
         self.gamma=config.gamma
         self.sigma=config.sigma
+        self.loss_weight = config.loss_weight
 
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
         
@@ -118,24 +119,27 @@ class MultiModalFlowBridge(L.LightningModule):
 
         # sample continuous and discrete states from hybrid bridge
 
-        state = self.bridge_continuous.sample(time, batch)
-        state = self.bridge_discrete.sample(time, batch)
-        state = state.to(self.device)
+        xt = self.bridge_continuous.sample(time, batch)
+        kt = self.bridge_discrete.sample(time, batch)
+
+        mutlimodal_state = TensorMultiModal(continuous=xt, discrete=kt, mask=batch.target.mask, time=time)
+        mutlimodal_state = mutlimodal_state.to(self.device)
 
         # compute loss
 
-        vt, logits = self.model(state)     
+        vt, logits = self.model(mutlimodal_state)     # (B, D, dim_continuous), # (B, D, vocab_size)
 
-        targets_continuous = self.bridge_continuous.conditional_drift(state, batch)
+        targets_continuous = self.bridge_continuous.conditional_drift(mutlimodal_state, batch)
         loss_mse =  F.mse_loss(vt, targets_continuous, reduction='none')
-        loss_mse = loss_mse * batch.target.mask    
+        loss_mse = loss_mse * mutlimodal_state.mask     # (B, D, dim_continuous)
+        loss_mse = loss_mse.sum() / mutlimodal_state.mask.sum()
 
         targets_discrete = batch.target.discrete.to(self.device)        
-        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets_discrete.view(-1), reduction='none')    # (B*D,)
-        loss_ce = loss_ce.view(len(batch), -1) * state.mask    # (B, D)
-        
-        loss = loss_ce + loss_mse
-        loss = loss.sum() / batch.target.mask.sum()
+        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets_discrete.view(-1), ignore_index=0, reduction='none')    # (B*D,)
+        loss_ce = loss_ce.view(len(batch), -1) * mutlimodal_state.mask.squeeze(-1)    # (B, D)
+        loss_ce = loss_ce.sum() / mutlimodal_state.mask.sum()
+
+        loss = loss_mse + self.loss_weight * loss_ce
 
         return loss
 

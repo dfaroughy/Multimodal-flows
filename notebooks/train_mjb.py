@@ -58,8 +58,12 @@ logger = CometLogger(api_key=config.comet_api_key,
                      offline_directory=config.dir,
                      experiment_key=config.experiment_id if config.experiment_id else None
                      )
+                     
+logger.experiment.add_tags(config.tags)
+logger.experiment.log_parameters(vars(config))                     
 
 #...dataset & dataloaders:
+
 aoj = AspenOpenJets(data_dir="/home/df630/Multimodal-Bridges/data/aoj", data_files="RunG_batch0.h5")
 
 jets, _ = aoj(num_jets=config.num_jets,
@@ -67,10 +71,9 @@ jets, _ = aoj(num_jets=config.num_jets,
               features={"continuous": None, "discrete": "tokens"},
               pt_order=True,
               padding='zeros')
-
-jets.mask = torch.ones_like(jets.discrete)
+jets.mask = torch.ones((config.num_jets, config.max_num_particles), dtype=torch.long)
 noise = torch.randint_like(jets.discrete, config.vocab_size)
-noise = TensorMultiModal(discrete=noise, mask=jets.mask)
+noise = TensorMultiModal(discrete=noise, mask=mask)
 
 data = DataCoupling(source=noise, target=jets)
 dataset = MultiModalDataset(data)

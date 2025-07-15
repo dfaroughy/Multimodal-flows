@@ -106,7 +106,8 @@ class ConditionalFlowMatching(L.LightningModule):
         time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)
 
         # sample continuous state from bridge
-        state = self.bridge_continuous.sample(time, batch)
+        xt = self.bridge_continuous.sample(time, batch)
+        state = TensorMultiModal(time=time, continuous=xt, mask=batch.target.mask)
         state = state.to(self.device)
 
         # compute loss
@@ -153,7 +154,7 @@ class UniformFlow:
     def __init__(self, sigma):
         self.sigma = sigma
 
-    def sample(self, time: torch.Tensor, batch: DataCoupling) -> TensorMultiModal:
+    def sample(self, time: torch.Tensor, batch: DataCoupling) -> torch.Tensor:
 
         t = self.reshape_time_dim_like(time, batch) # (B,) -> (B, 1, 1)
         x0 = batch.source.continuous  # (B, D, vocab_size)
@@ -161,9 +162,9 @@ class UniformFlow:
 
         xt = t * x1 + (1.0 - t) * x0   # time-interpolated state
         z = torch.randn_like(xt)       # noise
-        state = xt + self.sigma * z    # Dirac -> Gauss smear
+        xt += self.sigma * z    # Dirac -> Gauss smear
 
-        return TensorMultiModal(time=time, continuous=state, mask=batch.target.mask)
+        return xt
 
     def conditional_drift(self, state: TensorMultiModal, batch: DataCoupling) -> torch.Tensor:
         x0 = batch.source.continuous

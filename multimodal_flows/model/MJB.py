@@ -111,7 +111,8 @@ class MarkovJumpBridge(L.LightningModule):
 
         # sample continuous state from bridge
 
-        state = self.bridge_discrete.sample(time, batch)
+        kt = self.bridge_discrete.sample(time, batch)
+        state = TensorMultiModal(time=time, discrete=kt.discrete, mask=batch.target.mask)
         state = state.to(self.device)
 
         # compute loss
@@ -194,17 +195,16 @@ class RandomTelegraphBridge:
         rate = A + B[:, None, None] * qx + C[:, None, None] * qy
         return rate
 
-    def sample(self, time: torch.Tensor, batch: DataCoupling) -> TensorMultiModal:
+    def sample(self, time: torch.Tensor, batch: DataCoupling) -> torch.Tensor:
 
         # time: (B,) 
         k0 = batch.source.discrete                   # (B, D, 1)
         k1 = batch.target.discrete                   # (B, D, 1)  
 
         transition_probs = self.transition_probability(time, k0, k1)
-        state = Categorical(transition_probs).sample().to(k1.device) # (B, D)
-        state = state.unsqueeze(-1) # (B, D, 1)
+        kt = Categorical(transition_probs).sample().to(k1.device) # (B, D)
 
-        return TensorMultiModal(time=time, discrete=state, mask=batch.target.mask)
+        return kt.unsqueeze(-1) # (B, D, 1)
 
     def transition_probability(self, t, k0, k1):
         """

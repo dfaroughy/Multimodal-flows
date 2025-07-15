@@ -27,31 +27,29 @@ class ParticleFormer(nn.Module):
         super().__init__()
 
         self.n_embd = config.n_embd
+        self.n_head = config.n_head
 
         self.transformer = nn.ModuleDict(dict(
             wxe = nn.Linear(config.dim_continuous, config.n_embd),
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer_kin)]),
-            blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer_flavor)]),
-            blocks_fused = nn.ModuleList([Block(config, 'cross') for _ in range(config.n_layer_fused)]),
-            ln_k = LayerNorm(config.n_embd, bias=config.bias),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
-            proj_fused = nn.ModuleList([nn.Linear(2 * config.n_embd, config.n_inner, bias=config.bias),
-                                        LayerNorm(config.n_inner, bias=config.bias)]), # fused output layer norm and projection
-            head_kin = nn.ModuleList([nn.Linear(config.n_inner, config.n_embd, bias=config.bias),
+            blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            blocks_fused_kin  = nn.ModuleList([CrossBlock(config) for _ in range(config.n_layer_fused)]),
+            blocks_fused_flv  = nn.ModuleList([CrossBlock(config) for _ in range(config.n_layer_fused)]),
+            ln_kin = LayerNorm(config.n_embd, bias=config.bias),
+            ln_flv = LayerNorm(config.n_embd, bias=config.bias),
+            ln_kin_final = LayerNorm(config.n_embd, bias=config.bias),
+            ln_flv_final = LayerNorm(config.n_embd, bias=config.bias),
+            head_kin = nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias),
+                                     nn.GELU(),
+                                     nn.Linear(config.n_inner, config.dim_continuous, bias=config.bias)),
+            head_flv = nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias), 
                                       nn.GELU(),
-                                      nn.Linear(config.n_embd, config.dim_continuous, bias=config.bias)]), # regressor head for continuous feats
-            head_flv = nn.ModuleList([nn.Linear(config.n_inner, config.n_embd, bias=config.bias), 
-                                      nn.GELU(),
-                                      nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)]) # classifier head for discrete tokens
+                                      nn.Linear(config.n_inner, config.vocab_size, bias=config.bias)) # classifier head for discrete tokens
         ))
 
         self.apply(self._init_weights)
-
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
     def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
         """
@@ -59,52 +57,51 @@ class ParticleFormer(nn.Module):
             state.time is the time in the corruption process (B,)
         """
         
-        B, D = state.shape
-        pos = torch.arange(0, D, dtype=torch.long, device=state.time.device)    # shape (D)
-        att_mask = state.mask.bool() 
+        attn_mask = state.mask.clone()
+        attn_mask = state.mask.bool().squeeze()                   # (B, D)
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
+        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
 
         # initial embeddings
-        flv_emb = self.transformer.wte(state.discrete)                         # token embeddings of shape (B, D, n_embd)
         kin_emb = self.transformer.wxe(state.continuous)                       # feature embeddings of shape (B, D, n_embd)
+        flv_emb = self.transformer.wte(state.discrete.squeeze(-1))                         # token embeddings of shape (B, D, n_embd)
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)     # time embedding of shape (B, n_embd)
+        time_emb = time_emb.unsqueeze(1)                                       # (B, 1, n_embd)
 
-        f = self.transformer.drop(flv_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
-        k = self.transformer.drop(kin_emb.view(B, D, self.n_embd) + time_emb.view(B, 1, self.n_embd))
+        k = self.transformer.drop(kin_emb + time_emb)
+        f = self.transformer.drop(flv_emb + time_emb)
 
         f_skip = f.clone()  # skip connection for final layer norm  
         k_skip = k.clone()  # skip connection for final layer norm
-        comb_skip = torch.cat([k_skip, f_skip], dim=-1)  # skip connection for final layer norm
 
         # encoder blocks
 
-        for block in self.transformer.kin_blocks:
+        for block in self.transformer.blocks_kin:
+            k = block(k, attn_mask=attn_mask)
+            k += time_emb
 
-            k = block(f, attn_mask=att_mask)
-            k += time_emb.view(B, 1, self.n_embd)
-
-        for block in self.transformer.flv_blocks:
-
-            f = block(k, attn_mask=att_mask)
-            f += time_emb.view(B, 1, self.n_embd)
+        for block in self.transformer.blocks_flv:
+            f = block(f, attn_mask=attn_mask)
+            f += time_emb
 
         k = self.transformer.ln_kin(k + k_skip)
         f = self.transformer.ln_flv(f + f_skip)
+        
+        k_cross = k.clone()  # skip connection for final layer norm
+        f_cross = f.clone()  # skip connection for final layer norm
 
-        h = torch.cat([k, f], dim=-1)  # concatenate the two embeddings (B, D, 2*n_embd)
-        h_skip = h.clone()             # skip connection for final layer norm
-       
-        # fused blocks
+        for (block_1, block_2) in zip(self.transformer.blocks_fused_kin, self.transformer.blocks_fused_flv):
+            k = block_1(k, f_cross, attn_mask=attn_mask)
+            f = block_2(f, k_cross, attn_mask=attn_mask)
+            k += time_emb
+            f += time_emb
 
-        for block in self.transformer.blocks_fused:
+        k = self.transformer.ln_kin_final(k + k_skip)
+        f = self.transformer.ln_flv_final(f + f_skip)
 
-            h = block(h, attn_mask=att_mask)
-            h += comb_skip + time_emb.view(B, 1, self.n_embd)
-
-        h = self.transformer.proj_fused(h + h_skip)
-        h1, h2 = torch.split(h, [self.n_embd, self.n_embd], dim=-1)
-
-        h_kin = self.transformer.head_kin(h1 + k_skip) # regressor head for continuous feats
-        h_flv = self.transformer.head_flv(h2 + f_skip) # classifier head for discrete tokens
+        h_kin = self.transformer.head_kin(k) # regressor head for continuous feats
+        h_flv = self.transformer.head_flv(f) # classifier head for discrete tokens
 
         return h_kin, h_flv
 
@@ -206,4 +203,18 @@ class Block(nn.Module):
     def forward(self, x, attn_mask=None):
         x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)
         x = x + self.mlp(self.ln_2(x))
+        return x
+
+class CrossBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CrossAttention(config)
+        self.ln_3 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
+
+    def forward(self, x, z, attn_mask=None):
+        x = x + self.attn(self.ln_1(x), self.ln_2(z),  attn_mask=attn_mask)
+        x = x + self.mlp(self.ln_3(x))
         return x

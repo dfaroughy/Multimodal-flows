@@ -53,6 +53,10 @@ logger = CometLogger(api_key=config.comet_api_key,
                      offline_directory=config.dir,
                      experiment_key=config.experiment_id if config.experiment_id else None
                      )
+                     
+logger.experiment.add_tags(config.tags)
+logger.experiment.log_parameters(vars(config))                     
+                    
 
 #...dataset & dataloaders:
 aoj = AspenOpenJets(data_dir="/home/df630/Multimodal-Bridges/data/aoj", data_files="RunG_batch0.h5")

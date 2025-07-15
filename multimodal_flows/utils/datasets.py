@@ -152,7 +152,7 @@ def data_coupling_collate_fn(batch: namedtuple) -> DataCoupling:
     return DataCoupling(source, target, context)
 
 
-def standardize(jets, config):
+def standardize(jets, config, dim=3):
     """
     Standardizes the continuous features of the jets.
     Args:
@@ -161,8 +161,8 @@ def standardize(jets, config):
     Returns:
         TensorMultiModal: The standardized jets data.
     """
-    config.mean = jets.continuous.float().view(-1, config.vocab_size).mean(dim=0)
-    config.std = jets.continuous.float().view(-1, config.vocab_size).std(dim=0)
+    config.mean = jets.continuous.float().view(-1, dim).mean(dim=0)
+    config.std = jets.continuous.float().view(-1, dim).std(dim=0)
     jets.continuous = (jets.continuous - config.mean) / config.std 
     
 
