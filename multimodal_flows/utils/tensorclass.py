@@ -94,9 +94,10 @@ class TensorMultiModal:
         D = self.shape[-1]
         self.time = self.time.unsqueeze(1).repeat(1, D, 1)
 
-    def apply_mask(self, condition=None):
-        if "time" in self.available_modes():
-            self.time *= self.mask if condition is None else condition
+    def apply_mask(self, condition=None, include_time=False):
+        if include_time and "time" in self.available_modes():
+            if "time" in self.available_modes():
+                self.time *= self.mask if condition is None else condition
         if "continuous" in self.available_modes():
             self.continuous *= self.mask if condition is None else condition
         if "discrete" in self.available_modes():
