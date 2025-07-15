@@ -4,6 +4,47 @@ from torch.distributions import Categorical
 
 from utils.tensorclass import TensorMultiModal
 
+
+class HybridSolver:
+    def __init__(self, model, vocab_size, method='euler-leap', topk=None, temperature=1.0):
+        self.method = method
+        self.vocab_size = vocab_size
+        self.model = model
+        self.topk = topk
+        self.temperature = temperature
+
+    def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
+        if self.method == "euler-leap":
+            return self.euler_leap_step(state, delta_t, last_step)
+
+    def euler_leap_step(self, state: TensorMultiModal, delta_t: torch.Tensor, last_step: bool=False) -> TensorMultiModal:
+        """ - state.time (t): (B, 1) time tensor
+            - state.discrete (k) : (B, D, 1) current state tensor
+        """
+
+        vt, logits = self.model(state) 
+        logits = logits / self.temperature        # (B, D, vocab_size)
+        rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
+
+        assert rates.shape == logits.shape, "Rates and logits must have the same shape."
+        state.discrete = state.discrete.squeeze(-1)
+
+        delta_n = torch.poisson(rates * delta_t).to(state.time.device)  # all jumps
+        jump_mask = (torch.sum(delta_n, dim=-1).type_as(state.discrete) <= 1)  # for categorical data
+        diff = torch.arange(self.vocab_size, device=state.time.device).view(1, 1, self.vocab_size) - state.discrete[:, :, None]  
+        net_jumps = torch.sum(delta_n * diff, dim=-1).type_as(state.discrete)
+
+        state.discrete = (state.discrete + net_jumps * jump_mask) % self.vocab_size
+        state.discrete = state.discrete.unsqueeze(-1)
+        state.continuous += vt * delta_t # euler step
+
+        if last_step:
+            max_rate = torch.max(rates, dim=2)[1]
+            state.discrete = max_rate.unsqueeze(-1)
+
+        return state
+
+
 class ContinuousSolver:
     def __init__(self, model, method='euler'):
         self.method = method

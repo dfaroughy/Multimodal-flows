@@ -13,7 +13,7 @@ from model.MJB import RandomTelegraphBridge
 from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
-from model.solvers import DiscreteSolver, ContinuousSolver
+from model.solvers import HybridSolver
 from networks.ParticleTransformers import ParticleFormer
 
 
@@ -31,6 +31,8 @@ class MultiModalFlowBridge(L.LightningModule):
         self.time_eps = config.time_eps
         self.temperature = config.temperature
         self.num_timesteps = config.num_timesteps
+        self.mean = config.mean if hasattr(config, 'mean') else 0.0
+        self.std = config.std if hasattr(config, 'std') else 1.0
         self.lr_final = config.lr_final
         self.lr = config.lr
 
@@ -133,14 +135,16 @@ class MultiModalFlowBridge(L.LightningModule):
 
         return loss_mse, loss_ce
 
+    @torch.no_grad()
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
+
+        self.model.eval()
 
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
         
-        solver_ode = ContinuousSolver(model=self, method='euler')
-        solver_jumps = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap', temperature=self.temperature)
+        solver = HybridSolver(model=self, vocab_size=self.vocab_size, method='euler-leap', temperature=self.temperature)
         
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
@@ -150,8 +154,7 @@ class MultiModalFlowBridge(L.LightningModule):
         for i, t in enumerate(time_steps):
             is_last_step = (i == len(time_steps) - 1)
             state.time = torch.full((len(state),), t.item(), device=self.device)  
-            state = solver_ode.fwd_step(state, delta_t)         
-            state = solver_jumps.fwd_step(state, delta_t, is_last_step)
+            state = solver.fwd_step(state, delta_t, is_last_step)
 
         batch.target = state
 

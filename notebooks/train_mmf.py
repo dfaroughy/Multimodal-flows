@@ -84,8 +84,8 @@ def _make_dataloaders(config):
 
     standardize(jets, config, dim=config.dim_continuous)
 
-    gauss_noise = torch.randn_like(jets.continuous)
-    cat_noise = torch.randint_like(jets.discrete, config.vocab_size)
+    gauss_noise = torch.randn_like(jets.continuous) * jets.mask
+    cat_noise = torch.randint_like(jets.discrete, 1, config.vocab_size) * jets.mask
     noise = TensorMultiModal(continuous=gauss_noise, discrete=cat_noise, mask=jets.mask.clone())
 
     data = DataCoupling(source=noise, target=jets)
