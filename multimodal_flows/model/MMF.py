@@ -31,8 +31,6 @@ class MultiModalFlowBridge(L.LightningModule):
         self.time_eps = config.time_eps
         self.temperature = config.temperature
         self.num_timesteps = config.num_timesteps
-        self.mean = config.mean if hasattr(config, 'mean') else 0.0
-        self.std = config.std if hasattr(config, 'std') else 1.0
         self.lr_final = config.lr_final
         self.lr = config.lr
 

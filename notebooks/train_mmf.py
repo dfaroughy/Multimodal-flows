@@ -82,8 +82,10 @@ def _make_dataloaders(config):
                 pt_order=True,
                 padding='zeros')
 
-    standardize(jets, config, dim=config.dim_continuous)
-
+    config.metadata = metadata
+    jets.continuous = (jets.continuous - metadata['mean']) / metadata['std'] 
+    jets.apply_mask()
+    
     gauss_noise = torch.randn_like(jets.continuous) * jets.mask
     cat_noise = torch.randint_like(jets.discrete, 1, config.vocab_size) * jets.mask
     noise = TensorMultiModal(continuous=gauss_noise, discrete=cat_noise, mask=jets.mask.clone())
