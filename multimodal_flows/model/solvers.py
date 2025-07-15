@@ -4,7 +4,6 @@ from torch.distributions import Categorical
 
 from utils.tensorclass import TensorMultiModal
 
-
 class HybridSolver:
     def __init__(self, model, vocab_size, method='euler-leap', topk=None, temperature=1.0):
         self.method = method
@@ -23,7 +22,7 @@ class HybridSolver:
         """
 
         vt, logits = self.model(state) 
-        logits = logits / self.temperature        # (B, D, vocab_size)
+        logits = temperature_scaling(logits, T=self.temperature, freqs=[0.0, 0.,0.0847,0.2986,0.3078,0.0013,0.0014,0.0011,0.001]) 
         rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."
@@ -103,7 +102,8 @@ class DiscreteSolver:
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        logits = self.model(state) / self.temperature        # (B, D, vocab_size)
+        logits = self.model(state)   # (B, D, vocab_size)
+        logits = temperature_scaling(logits, self.temperature)  # apply temperature scaling
         rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."
@@ -202,3 +202,20 @@ class DiscreteSolver:
             delta_p = new_delta_p  # Update reference probability
 
         return state_corrected, rates_corrected
+
+
+def temperature_scaling(logits, T, freqs=0.0):
+    """
+    Apply custom temperature scaling: logits / (T * (1 + freqs))
+    
+    logits:     Tensor of shape (B, D, vocab_size)
+    freqs:      Tensor of shape (vocab_size,) - class frequency fraction
+    T:          Scalar (float) - temperature hyperparameter
+    """
+    if freqs:
+        freqs = torch.tensor(freqs).view(1, 1, -1) 
+        temp = T * (1.0 + freqs)
+        temp = temp.to(logits.device)
+    else:
+        temp = T 
+    return logits / temp
