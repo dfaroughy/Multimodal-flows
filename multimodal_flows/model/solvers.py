@@ -10,7 +10,7 @@ class HybridSolver:
         self.vocab_size = vocab_size
         self.model = model
         self.topk = topk
-        self.temperature = temperature
+        self.T = temperature
 
     def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
         if self.method == "euler-leap":
@@ -22,7 +22,7 @@ class HybridSolver:
         """
 
         vt, logits = self.model(state) 
-        logits = temperature_scaling(logits, T=self.temperature, freqs=[0.0, 0.,0.0847,0.2986,0.3078,0.0013,0.0014,0.0011,0.001]) 
+        logits = temperature_scaling(logits, self.T) 
         rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."
@@ -204,7 +204,7 @@ class DiscreteSolver:
         return state_corrected, rates_corrected
 
 
-def temperature_scaling(logits, T, freqs=0.0):
+def temperature_scaling(logits, T=1.0):
     """
     Apply custom temperature scaling: logits / (T * (1 + freqs))
     
@@ -212,10 +212,8 @@ def temperature_scaling(logits, T, freqs=0.0):
     freqs:      Tensor of shape (vocab_size,) - class frequency fraction
     T:          Scalar (float) - temperature hyperparameter
     """
-    if freqs:
-        freqs = torch.tensor(freqs).view(1, 1, -1) 
-        temp = T * (1.0 + freqs)
-        temp = temp.to(logits.device)
-    else:
-        temp = T 
-    return logits / temp
+    if isinstance(T, (list, tuple)):
+        T = torch.tensor(T).view(1, 1, -1) 
+        T = temp.to(logits.device)
+
+    return logits / T
