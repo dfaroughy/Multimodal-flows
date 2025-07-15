@@ -355,6 +355,18 @@ class ParticleClouds:
             self._flavored_kinematics("Positron", selection=self.discrete == 6)
             self._flavored_kinematics("Muon", selection=self.discrete == 7)
             self._flavored_kinematics("AntiMuon", selection=self.discrete == 8)
+            self._flavored_kinematics("Hadron", selection=(self.discrete >= 2) & (self.discrete <= 4))
+            self._flavored_kinematics("Lepton", selection=(self.discrete > 4))
+            self._flavored_kinematics("Neutral", selection=(self.discrete <= 2))
+            self._flavored_kinematics("Charged", selection=(self.discrete > 2))
+            self._flavored_kinematics("Negative", selection=(self.discrete == 3) | (self.discrete == 5) | (self.discrete == 7),)
+            self._flavored_kinematics("Positive", selection=(self.discrete == 4) | (self.discrete == 6) | (self.discrete == 8),)
+
+            # get particle charges:
+
+            self.charge = torch.zeros_like(self.pt)
+            self.charge[self.isPositive] = 1
+            self.charge[self.isNegative] = -1
 
     def _flavored_kinematics(self, name, selection):
         if self.data.has_discrete:
@@ -368,3 +380,498 @@ class ParticleClouds:
 
     def __len__(self):
         return len(self.data)
+
+
+    @property
+    def has_continuous(self):
+        if self.data.has_continuous:
+            return True
+        return False
+
+    @property
+    def has_discrete(self):
+        if self.data.has_discrete:
+            return True
+        return False
+
+    @property
+    def has_hybrid(self):
+        if self.data.has_discrete and self.data.has_continuous:
+            return True
+        return False
+
+    def histplot(
+            self,
+            feature,
+            apply_map="mask_bool",
+            xlim=None,
+            ylim=None,
+            xlabel=None,
+            ylabel=None,
+            figsize=(3, 3),
+            fontsize=10,
+            ax=None,
+            **kwargs,
+        ):
+            if ax is None:
+                _, ax = plt.subplots(figsize=figsize)
+
+            x = getattr(self, feature)
+
+            if "num" in feature:
+                apply_map = None
+
+            if apply_map == "mask_bool":
+                x = x[self.mask_bool]
+
+            elif apply_map is not None:
+                x = apply_map(x)
+
+            if isinstance(x, torch.Tensor):
+                x.detach().cpu().numpy()
+
+            sns.histplot(x, element="step", ax=ax, **kwargs)
+            ax.set_xlabel(
+                "particle-level " + feature if xlabel is None else xlabel,
+                fontsize=fontsize,
+            )
+            ax.set_ylabel(ylabel, fontsize=fontsize)
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+
+
+@dataclass
+class JetFeatures:
+    """
+    A dataclass to hold jet features and substructure.
+    """
+
+    data: TensorMultiModal = None
+
+    def __post_init__(self):
+        self.constituents = ParticleClouds(self.data)
+        self.numParticles = torch.sum(self.constituents.mask, dim=1)
+
+        if self.constituents.has_continuous:
+            self.px = self.constituents.px.sum(axis=-1)
+            self.py = self.constituents.py.sum(axis=-1)
+            self.pz = self.constituents.pz.sum(axis=-1)
+            self.E = self.constituents.E.sum(axis=-1)
+            self.pt = torch.sqrt(self.px**2 + self.py**2)
+            self.m = torch.sqrt(self.E**2 - self.pt**2 - self.pz**2)
+            self.eta = 0.5 * torch.log((self.pt + self.pz) / (self.pt - self.pz))
+            self.phi = torch.atan2(self.py, self.px)
+
+            self._substructure(R=0.8, beta=1.0, use_wta_scheme=True)
+
+        if self.constituents.has_discrete:
+            self.charge = self._jet_charge(kappa=0.0)
+
+        if self.constituents.has_continuous and self.constituents.has_discrete:
+            self.jet_charge = self._jet_charge(kappa=1.0)
+
+    def histplot(
+        self,
+        features="pt",
+        apply_map=None,
+        xlim=None,
+        ylim=None,
+        xlabel=None,
+        ylabel=None,
+        figsize=(3, 3),
+        fontsize=10,
+        ax=None,
+        **kwargs,
+    ):
+        x = getattr(self, features)
+
+        if apply_map is not None:
+            x = apply_map(x)
+
+        if isinstance(x, torch.Tensor):
+            x.cpu().numpy()
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=figsize)
+
+        sns.histplot(x=x, element="step", ax=ax, **kwargs)
+        ax.set_xlabel(
+            "jet-level " + features if xlabel is None else xlabel,
+            fontsize=fontsize,
+        )
+        ax.set_ylabel(ylabel, fontsize=fontsize)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+
+
+
+
+    # metrics:
+
+    def Wassertein1D(self, feature, reference):
+        x = getattr(self, feature)
+        y = getattr(reference, feature)
+        return scipy.stats.wasserstein_distance(x, y)
+
+    # helper methods:
+
+
+    def _jet_charge(self, kappa):
+        """jet charge defined as Q_j^kappa = Sum_i Q_i * (pT_i / pT_jet)^kappa"""
+        # charge = map_tokens_to_basis(self.constituents.discrete)[..., -1]
+        if kappa > 0:
+            jet_charge = self.constituents.charge * (self.constituents.pt) ** kappa
+            return jet_charge.sum(axis=1) / (self.pt**kappa)
+        else:
+            return self.constituents.charge.sum(axis=1)
+
+    def _get_flavor_counts(self, return_fracs=False, vocab_size=9):
+        num_jets = len(self.constituents)
+        tokens = self.constituents.discrete
+        mask = self.constituents.mask_bool
+
+        flat_indices = torch.arange(num_jets, device=tokens.device).unsqueeze(1) * (vocab_size + 1) + tokens * mask
+        flat_indices = flat_indices[mask]  # Use the mask to remove invalid (padded) values
+
+        token_counts = torch.bincount(flat_indices, minlength=num_jets * (vocab_size + 1))
+        count = token_counts.view(num_jets, vocab_size + 1)  # Reshape to (B, n + 1)
+        return count
+
+
+    def _substructure(self, R=0.8, beta=1.0, use_wta_scheme=True):
+        constituents_ak = ak.zip(
+            {
+                "pt": np.array(self.constituents.pt),
+                "eta": np.array(self.constituents.eta_rel),
+                "phi": np.array(self.constituents.phi_rel),
+                "mass": np.zeros_like(np.array(self.constituents.pt)),
+            },
+            with_name="Momentum4D",
+        )
+
+        constituents_ak = ak.mask(constituents_ak, constituents_ak.pt > 0)
+        constituents_ak = ak.drop_none(constituents_ak)
+
+        self._constituents_ak = constituents_ak[ak.num(constituents_ak) >= 3]
+
+        if use_wta_scheme:
+            jetdef = fastjet.JetDefinition(
+                fastjet.kt_algorithm, R, fastjet.WTA_pt_scheme
+            )
+        else:
+            jetdef = fastjet.JetDefinition(fastjet.kt_algorithm, R)
+
+        print("Clustering jets with fastjet")
+        print("Jet definition:", jetdef)
+        print("Calculating N-subjettiness")
+
+        self._cluster = fastjet.ClusterSequence(self._constituents_ak, jetdef)
+        self.d0 = self._calc_d0(R, beta)
+        self.c1 = self._cluster.exclusive_jets_energy_correlator(njets=1, func="c1")
+        self.d2 = self._cluster.exclusive_jets_energy_correlator(njets=1, func="d2")
+        self.tau1 = self._calc_tau1(beta)
+        self.tau2 = self._calc_tau2(beta)
+        self.tau3 = self._calc_tau3(beta)
+        self.tau21 = np.ma.divide(self.tau2, self.tau1)
+        self.tau32 = np.ma.divide(self.tau3, self.tau2)
+
+    def _calc_deltaR(self, particles, jet):
+        jet = ak.unflatten(ak.flatten(jet), counts=1)
+        return particles.deltaR(jet)
+
+    def _calc_d0(self, R, beta):
+        """Calculate the d0 values."""
+        return ak.sum(self._constituents_ak.pt * R**beta, axis=1)
+
+    def _calc_tau1(self, beta):
+        """Calculate the tau1 values."""
+        excl_jets_1 = self._cluster.exclusive_jets(n_jets=1)
+        delta_r_1i = self._calc_deltaR(self._constituents_ak, excl_jets_1[:, :1])
+        pt_i = self._constituents_ak.pt
+        return ak.sum(pt_i * delta_r_1i**beta, axis=1) / self.d0
+
+    def _calc_tau2(self, beta):
+        """Calculate the tau2 values."""
+        excl_jets_2 = self._cluster.exclusive_jets(n_jets=2)
+        delta_r_1i = self._calc_deltaR(self._constituents_ak, excl_jets_2[:, :1])
+        delta_r_2i = self._calc_deltaR(self._constituents_ak, excl_jets_2[:, 1:2])
+        pt_i = self._constituents_ak.pt
+
+        # add new axis to make it broadcastable
+        min_delta_r = ak.min(
+            ak.concatenate(
+                [
+                    delta_r_1i[..., np.newaxis] ** beta,
+                    delta_r_2i[..., np.newaxis] ** beta,
+                ],
+                axis=-1,
+            ),
+            axis=-1,
+        )
+        return ak.sum(pt_i * min_delta_r, axis=1) / self.d0
+
+    def _calc_tau3(self, beta):
+        """Calculate the tau3 values."""
+        excl_jets_3 = self._cluster.exclusive_jets(n_jets=3)
+        delta_r_1i = self._calc_deltaR(self._constituents_ak, excl_jets_3[:, :1])
+        delta_r_2i = self._calc_deltaR(self._constituents_ak, excl_jets_3[:, 1:2])
+        delta_r_3i = self._calc_deltaR(self._constituents_ak, excl_jets_3[:, 2:3])
+        pt_i = self._constituents_ak.pt
+
+        min_delta_r = ak.min(
+            ak.concatenate(
+                [
+                    delta_r_1i[..., np.newaxis] ** beta,
+                    delta_r_2i[..., np.newaxis] ** beta,
+                    delta_r_3i[..., np.newaxis] ** beta,
+                ],
+                axis=-1,
+            ),
+            axis=-1,
+        )
+        return ak.sum(pt_i * min_delta_r, axis=1) / self.d0
+
+
+class EnergyCorrelationFunctions:
+
+    def __init__(self, data):
+        self.data = data
+        self.mask_3_parts = data.mask.sum(dim=1).squeeze(-1) >= 3 
+
+    def get_flavor(self, token):
+        flavor = self.data.clone()
+        if token == 4567:
+            flavor_mask = flavor.discrete >= 4
+        elif token == 23:
+            flavor_mask = (flavor.discrete == 2) | (flavor.discrete == 3) 
+        elif token == 45:
+            flavor_mask = (flavor.discrete == 4) | (flavor.discrete == 5)
+        elif token == 67:
+            flavor_mask = (flavor.discrete == 6) | (flavor.discrete == 7)
+        elif token == 123:
+            flavor_mask = (flavor.discrete >= 1) & (flavor.discrete <= 3)
+        elif token == 234567:
+            flavor_mask = (flavor.discrete >= 2) 
+        elif token == 10:
+            flavor_mask = (flavor.discrete == 0) | (flavor.discrete == 1)   
+        elif token == 357:
+            flavor_mask = (flavor.discrete == 3) | (flavor.discrete == 5) | (flavor.discrete == 7)
+        elif token == 246:
+            flavor_mask = (flavor.discrete == 2) | (flavor.discrete == 4) | (flavor.discrete == 6)
+        else:
+            flavor_mask = flavor.discrete == token
+        
+        flavor.apply_mask(flavor_mask)
+        flavor.mask *= flavor_mask 
+        del flavor.discrete
+        return flavor
+        
+    def compute_ecf(self, flavor_i, flavor_j=None, beta=1.0):
+
+        flavor = {'photon': 0, 
+                  'h0': 1,
+                  'h-': 2,
+                  'h+': 3,
+                  'e-': 4,
+                  'e+': 5,
+                  'mu-': 6,
+                  'mu+': 7,
+                  'hadron': 123,
+                  'lepton': 4567,
+                  'positive':357,
+                  'negative':246,
+                  'charged': 234567,
+                  'neutral': 10,
+                  'h+/-': 23,
+                  'e+/-': 45,
+                  'mu+/-': 67,
+                  }
+                  
+        i = flavor[flavor_i]
+        j = flavor[flavor_j] if flavor_j is not None else None
+
+        if flavor_j is None:
+            jets = self.get_flavor(i).continuous
+            return self._auto_ecf(jets, beta)
+        else:
+            jets_i = self.get_flavor(i).continuous
+            jets_j = self.get_flavor(j).continuous
+            return self._cross_ecf(jets_i, jets_j, beta)
+
+    def _auto_ecf(self, tensor, beta=1.0):
+
+        auto_ecf = []
+        jet_pT2 = []
+
+        for jet in tensor:
+            
+            jet = jet[jet[:, 0] != 0]
+
+            if len(jet) < 2:
+                auto_ecf.append(0.0)
+                jet_pT2.append(0.0)
+                continue
+
+            pT = jet[:, 0]
+            eta = jet[:, 1]
+            phi = jet[:, 2]
+
+            pT2 = pT.sum() ** 2
+
+            # Compute pairwise differences
+            delta_eta = eta.unsqueeze(1) - eta.unsqueeze(0)
+            delta_phi = phi.unsqueeze(1) - phi.unsqueeze(0)
+            delta_phi = torch.remainder(delta_phi + torch.pi, 2 * torch.pi) - torch.pi
+
+            # Compute pairwise distances
+            R_ij = torch.sqrt(delta_eta**2 + delta_phi**2) ** beta
+
+            ecf_matrix = (pT.unsqueeze(1) * pT.unsqueeze(0)) * R_ij / 2.0
+            ecf = ecf_matrix.sum() / pT2
+
+            auto_ecf.append(ecf.item())
+            jet_pT2.append(pT2.item())
+
+        auto_ecf = torch.tensor(auto_ecf)[self.mask_3_parts]
+        jet_pT2 = torch.tensor(jet_pT2)[self.mask_3_parts]
+
+        return auto_ecf, jet_pT2
+
+
+    def _cross_ecf(self, tensor_1, tensor_2, beta=1.0):
+
+        cross_ecf = []
+        jet_pT2 = []
+
+        for idx, jet in enumerate(tensor_1):
+
+            j0 = jet[jet[:, 0] != 0]
+            j1 = tensor_2[idx][tensor_2[idx][:, 0] != 0]
+
+            if len(jet) == 0  or len(jet) == 0:
+                cross_ecf.append(0.0)
+                jet_pT2.append(0.0)
+                continue
+
+            pT_0, eta_0, phi_0 = j0[:, 0], j0[:, 1], j0[:, 2]
+            pT_1, eta_1, phi_1 = j1[:, 0], j1[:, 1], j1[:, 2]
+
+            pT2 = pT_0.sum() * pT_1.sum()
+
+            delta_eta = eta_0.unsqueeze(1) - eta_1.unsqueeze(0)
+            delta_phi = phi_0.unsqueeze(1) - phi_1.unsqueeze(0)
+            delta_phi = torch.remainder(delta_phi + np.pi, 2 * np.pi) - np.pi
+
+            R_ij = torch.sqrt(delta_eta**2 + delta_phi**2) ** beta
+
+            ecf_matrix = (pT_0.unsqueeze(1) * pT_1.unsqueeze(0)) * R_ij
+            ecf = ecf_matrix.sum() / pT2
+
+            cross_ecf.append(ecf.item())
+            jet_pT2.append(pT2.item())
+
+        cross_ecf = torch.tensor(cross_ecf)[self.mask_3_parts]
+        jet_pT2 = torch.tensor(jet_pT2)[self.mask_3_parts]
+
+        return cross_ecf, jet_pT2
+
+
+class JetChargeDipole:
+
+    """
+    Compute pT-weighted jet charge  Q_kappa  and
+    the 2-point electric-dipole moment  d2  for every jet.
+    """
+
+    def __init__(self, data):
+
+        """
+        data: an object with attributes
+              .continuous  (pT, eta, phi) padded with zeros
+              .charge      integer charges (−1, 0, +1)
+              .mask        boolean mask of real particles
+        """
+        self.x = data.constituents.continuous      # (n, D, 3)
+        self.Q = data.constituents.charge          # (n, D)
+        self.mask = data.constituents.mask_bool    # (n, D)
+
+        # option: keep only jets that have ≥2 (for d2) or ≥1 (for Q) particles
+
+        n_part = self.mask.sum(dim=1)
+        self.valid_Q  = n_part >= 1
+        self.valid_d2 = n_part >= 2
+
+    def _delta_R(self, eta, phi):
+        d_eta = eta.unsqueeze(1) - eta.unsqueeze(0)
+        d_phi = torch.remainder(phi.unsqueeze(1) - phi.unsqueeze(0) + np.pi,
+                                2 * np.pi) - np.pi
+        return torch.sqrt(d_eta**2 + d_phi**2)
+
+    def charge_and_dipole(self, kappa: float = 1.0, beta: float = 1.0):
+        """
+        Compute the pT-weighted jet charge  Q_kappa  and the electric–dipole
+        moment  d2  for every jet in the batch.
+
+        Returns
+        -------
+        Q_kappa : 1-D tensor, length = n_valid_jets
+        d2      : 1-D tensor, length = n_valid_jets
+                (jets with <2 particles get filtered out, like _auto_ecf)
+        """
+
+        Q0_list, Qkappa_list, d2_list = [],[],[]     # results for *all* jets
+        mask_2_parts = (self.mask.sum(dim=1) >= 2)   # ≥2 real particles
+
+        for idx, jet in enumerate(self.x):        # iterate over jets   (D,3) view
+
+            pT, eta, phi = jet[:, 0], jet[:, 1], jet[:, 2]
+            mask = pT > 0
+            Q = self.Q[idx][mask].float() 
+            pT = pT[mask]
+            eta = eta[mask]
+            phi = phi[mask]
+
+            # -------------------------------------------------
+            #   Jet charge   Q_kappa
+            # -------------------------------------------------
+
+            jet_pT = pT.sum()
+            
+            if jet_pT == 0:
+                Qkappa = torch.nan
+                Q0 = torch.nan
+            else:
+                Qkappa = (Q * pT**kappa).sum() / jet_pT
+                Q0 = Q.sum() 
+
+            # -------------------------------------------------
+            #   Electric-dipole   d2
+            # -------------------------------------------------
+
+            if len(jet) < 2:
+                d2 = torch.nan
+            else:
+                # pair-wise ΔR
+                d_eta = eta.unsqueeze(1) - eta.unsqueeze(0)
+                d_phi = torch.remainder(phi.unsqueeze(1) - phi.unsqueeze(0) + torch.pi,
+                                        2 * torch.pi) - torch.pi
+                R_ij  = torch.sqrt(d_eta**2 + d_phi**2).pow(beta)   # (N,N)
+
+                weight   = (Q * pT).unsqueeze(1) * (Q * pT).unsqueeze(0)
+                dip_mat  = weight * R_ij / 2.0          # divide-by-2 like _auto_ecf
+                d2       = dip_mat.sum() / jet_pT**2
+
+            Q0_list.append(Q0)
+            Qkappa_list.append(Qkappa)
+            d2_list.append(d2)
+
+        # tensor-ise and filter exactly like _auto_ecf
+        Q0 = torch.tensor(Q0_list)
+        Qkappa  = torch.tensor(Qkappa_list)
+        d2 = torch.tensor(d2_list)
+
+        Q0  = Q0[mask_2_parts]
+        Qkappa = Qkappa[mask_2_parts]
+        d2 = d2[mask_2_parts]
+
+        return Q0, Qkappa, d2

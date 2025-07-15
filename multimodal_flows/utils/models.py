@@ -18,23 +18,23 @@ class LayerNorm(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, scale=1):
         super().__init__()
 
-        assert config.n_embd % config.n_head == 0
+        assert scale * config.n_embd % config.n_head == 0
 
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_attn = nn.Linear(config.n_embd * scale, 3 * config.n_embd * scale, bias=config.bias)
+        self.c_proj = nn.Linear(config.n_embd * scale, config.n_embd * scale, bias=config.bias)
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
-        self.n_embd = config.n_embd
+        self.n_embd = config.n_embd * scale
         self.dropout = config.dropout
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
         if config.qk_layernorm:
-            self.q_layernorm = LayerNorm(config.n_embd // self.n_head, bias=config.bias)
-            self.k_layernorm = LayerNorm(config.n_embd // self.n_head, bias=config.bias)
+            self.q_layernorm = LayerNorm(config.n_embd * scale // self.n_head, bias=config.bias)
+            self.k_layernorm = LayerNorm(config.n_embd * scale// self.n_head, bias=config.bias)
 
         self.qk_layernorm = config.qk_layernorm
 

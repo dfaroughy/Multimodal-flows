@@ -35,12 +35,10 @@ class ParticleFormer(nn.Module):
             drop = nn.Dropout(config.dropout),
             blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            blocks_fused_kin  = nn.ModuleList([CrossBlock(config) for _ in range(config.n_layer_fused)]),
-            blocks_fused_flv  = nn.ModuleList([CrossBlock(config) for _ in range(config.n_layer_fused)]),
-            ln_kin = LayerNorm(config.n_embd, bias=config.bias),
-            ln_flv = LayerNorm(config.n_embd, bias=config.bias),
-            ln_kin_final = LayerNorm(config.n_embd, bias=config.bias),
-            ln_flv_final = LayerNorm(config.n_embd, bias=config.bias),
+            blocks_fused = nn.ModuleList([Block(config, fused=True) for _ in range(config.n_layer_fused)]),
+            ln_fused= LayerNorm(2 * config.n_embd, bias=config.bias),
+            ln_kin_last  = LayerNorm(config.n_embd, bias=config.bias),
+            ln_flv_last  = LayerNorm(config.n_embd, bias=config.bias),
             head_kin = nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias),
                                      nn.GELU(),
                                      nn.Linear(config.n_inner, config.dim_continuous, bias=config.bias)),
@@ -85,25 +83,21 @@ class ParticleFormer(nn.Module):
             f = block(f, attn_mask=attn_mask)
             f += time_emb
 
-        k = self.transformer.ln_kin(k + k_skip)
-        f = self.transformer.ln_flv(f + f_skip)
-        
-        k_cross = k.clone()  # skip connection for final layer norm
-        f_cross = f.clone()  # skip connection for final layer norm
+        h = torch.cat((k + k_skip, f + f_skip), dim=-1)  # concatenate the continuous and discrete embeddings
+        h = self.transformer.ln_fused(h)  
 
-        for (block_1, block_2) in zip(self.transformer.blocks_fused_kin, self.transformer.blocks_fused_flv):
-            k = block_1(k, f_cross, attn_mask=attn_mask)
-            f = block_2(f, k_cross, attn_mask=attn_mask)
-            k += time_emb
-            f += time_emb
+        for block in self.transformer.blocks_fused:
+            h = block(h, attn_mask=attn_mask)
 
-        k = self.transformer.ln_kin_final(k + k_skip)
-        f = self.transformer.ln_flv_final(f + f_skip)
+        k, f = h.split((self.n_embd, self.n_embd), dim=-1)  # split the concatenated embeddings back into continuous and discrete parts
 
-        h_kin = self.transformer.head_kin(k) # regressor head for continuous feats
-        h_flv = self.transformer.head_flv(f) # classifier head for discrete tokens
+        k = self.transformer.ln_kin_last(k + k_skip + time_emb)  # final layer norm for continuous features
+        f = self.transformer.ln_flv_last(f + f_skip + time_emb)  # final layer norm for discrete tokens
 
-        return h_kin, h_flv
+        head_kin = self.transformer.head_kin(k) # regressor head for continuous feats
+        head_flv = self.transformer.head_flv(f) # classifier head for discrete tokens
+
+        return head_kin, head_flv
 
     def _init_weights(self, module):
 
@@ -177,11 +171,11 @@ class FlavorFormer(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, scale):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, config.n_inner, bias=config.bias)
+        self.c_fc    = nn.Linear(config.n_embd * scale, config.n_inner, bias=config.bias)
         self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(config.n_inner , config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(config.n_inner , config.n_embd  * scale, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -193,12 +187,15 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, fused=None):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = SelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+
+        scale = 2 if fused is not None else 1
+
+        self.ln_1 = LayerNorm(config.n_embd * scale, bias=config.bias)
+        self.attn = SelfAttention(config, scale)
+        self.ln_2 = LayerNorm(config.n_embd * scale, bias=config.bias)
+        self.mlp = MLP(config, scale)
 
     def forward(self, x, attn_mask=None):
         x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)

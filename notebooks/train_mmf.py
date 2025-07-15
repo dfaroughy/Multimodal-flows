@@ -40,6 +40,7 @@ def experiment_configs():
     config.add_argument("--n_embd", type=int, default=256)
     config.add_argument("--n_inner", type=int, default=1024)
     config.add_argument("--n_layer", type=int, default=2)
+    config.add_argument("--n_layer_cross", type=int, default=2)
     config.add_argument("--n_layer_fused", type=int, default=2)
     config.add_argument("--n_head", type=int, default=2)
     config.add_argument("--dropout", type=float, default=0.0)
@@ -104,6 +105,7 @@ def _make_dataloaders(config):
 def run_experiment(config):
 
     logger = _set_logger(config)
+    train, val = _make_dataloaders(config)
 
     mmf = MultiModalFlowBridge(config)
     
@@ -126,7 +128,6 @@ def run_experiment(config):
                         gradient_clip_val=1.0,
                         )
 
-    train, val = _make_dataloaders(config)
     trainer.fit(mmf, train, val)
 
 
