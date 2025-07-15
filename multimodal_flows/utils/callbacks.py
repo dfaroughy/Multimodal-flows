@@ -48,6 +48,14 @@ class FlowGeneratorCallback(Callback):
 
         temp_files = self.experiment_dir.glob(f"temp_data{self.tag}_*.h5")
         sample = TensorMultiModal.cat([TensorMultiModal.load_from(str(f)) for f in temp_files], dim=0)
+
+        if sample.has_continuous: # post-process continuous features
+
+            mu = self.config.metadata['mean']
+            sig = self.config.metadata['std']
+            sample.continuous = (sample.continuous * sig) + mu
+
+        sample.apply_mask()  # ensure mask is applied to pads
         sample.save_to(f'{self.experiment_dir}/generation_results{self.tag}/generated_sample.h5')
 
     def _clean_temp_files(self):

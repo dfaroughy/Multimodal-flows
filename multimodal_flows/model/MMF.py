@@ -26,6 +26,7 @@ class MultiModalFlowBridge(L.LightningModule):
         self.vocab_size = config.vocab_size
         self.num_jets = config.num_jets
         self.max_num_particles = config.max_num_particles
+        self.metadata = config.metadata 
 
         self.max_epochs = config.max_epochs
         self.time_eps = config.time_eps

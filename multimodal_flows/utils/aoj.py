@@ -1,11 +1,24 @@
-import numpy as np
 import torch
+import numpy as np
+import awkward as ak
+import vector
+import fastjet
+import scipy
 import h5py
 import os
 import urllib.request
 import json
 from torch.utils.data import DataLoader, Subset
 import lightning.pytorch as L
+from torch.nn import functional as F
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from dataclasses import dataclass
+
+plt.rcParams["mathtext.fontset"] = "cm"
+plt.rcParams["figure.autolayout"] = False
+vector.register_awkward()
 
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
@@ -181,7 +194,7 @@ class AspenOpenJets:
             raise RuntimeError(f"Failed to download file from {full_url}. Error: {e}")
 
     def _filter_particles(self, PFCands):
-        """Filter and remove bad particle candidates.
+        """Filter and remove bad particle candidates. e.g. pdg_id=2
         """
         mask_bad_pids = np.abs(PFCands[:, :, -2]) < 11
         PFCands[mask_bad_pids] = np.zeros_like(PFCands[mask_bad_pids])
@@ -299,10 +312,59 @@ class AspenOpenJets:
             }
         
         if continuous is not None:
-            metadata["mean"] = continuous[mask_bool].mean(0).tolist()
-            metadata["std"] = continuous[mask_bool].std(0).tolist()
-            metadata["min"] = continuous[mask_bool].min(0).values.tolist()
-            metadata["max"] = continuous[mask_bool].max(0).values.tolist()
+            metadata["mean"] = continuous[mask_bool].mean(0)
+            metadata["std"] = continuous[mask_bool].std(0)
+            metadata["min"] = continuous[mask_bool].min(0)
+            metadata["max"] = continuous[mask_bool].max(0)
 
-        metadata["categorical_probs"] = hist.tolist()
+        # metadata["categorical_probs"] = hist.tolist()
         return metadata
+
+
+@dataclass
+class ParticleClouds:
+    """
+    A dataclass to hold particle cloud low-level features
+    """
+
+    data: TensorMultiModal = None
+
+    def __post_init__(self):
+
+        self.continuous = self.data.continuous  # (B, D, dim_continuous=3)
+        self.discrete = self.data.discrete      # (B, D)
+        self.mask = self.data.mask              # (B, D, 1) 
+        self.mask_bool = self.mask.squeeze(-1) > 0
+        self.multiplicity = torch.sum(self.mask, dim=1)
+
+        if self.data.has_continuous:
+            self.pt = self.continuous[..., 0]
+            self.eta_rel = self.continuous[..., 1]
+            self.phi_rel = self.continuous[..., 2]
+            self.px = self.pt * torch.cos(self.phi_rel)
+            self.py = self.pt * torch.sin(self.phi_rel)
+            self.pz = self.pt * torch.sinh(self.eta_rel)
+            self.E = self.pt * torch.cosh(self.eta_rel)
+            
+        if self.data.has_discrete:
+            self._flavored_kinematics("Photon", selection=self.discrete == 1)
+            self._flavored_kinematics("NeutralHadron", selection=self.discrete == 2)
+            self._flavored_kinematics("NegativeHadron", selection=self.discrete == 3)
+            self._flavored_kinematics("PositiveHadron", selection=self.discrete == 4)
+            self._flavored_kinematics("Electron", selection=self.discrete == 5)
+            self._flavored_kinematics("Positron", selection=self.discrete == 6)
+            self._flavored_kinematics("Muon", selection=self.discrete == 7)
+            self._flavored_kinematics("AntiMuon", selection=self.discrete == 8)
+
+    def _flavored_kinematics(self, name, selection):
+        if self.data.has_discrete:
+            setattr(self, f"is{name}", selection * self.mask_bool)
+            setattr(self, f"num_{name}", torch.sum(getattr(self, f"is{name}"), dim=1))
+
+        if self.data.has_continuous:
+            setattr(self, f"pt_{name}", self.pt[getattr(self, f"is{name}")])
+            setattr(self, f"eta_{name}", self.eta_rel[getattr(self, f"is{name}")])
+            setattr(self, f"phi_{name}", self.phi_rel[getattr(self, f"is{name}")])
+
+    def __len__(self):
+        return len(self.data)
