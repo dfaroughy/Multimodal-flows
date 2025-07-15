@@ -53,31 +53,23 @@ class MultiModalFlowBridge(L.LightningModule):
         
     def training_step(self, batch: DataCoupling, batch_idx):
 
-        loss = self.loss(batch)
+        loss_mse, loss_ce = self.loss(batch)
+        loss = loss_mse + self.loss_weight * loss_ce
 
-        self.log("train_loss",
-                 loss,
-                 on_epoch=True,
-                 prog_bar=True,
-                 logger=True,
-                 sync_dist=True,
-                 batch_size=len(batch)
-                 )
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
 
         return {"loss": loss}
-        
+
     def validation_step(self, batch: DataCoupling, batch_idx):
 
-        loss = self.loss(batch)
+        loss_mse, loss_ce = self.loss(batch)
+        loss = loss_mse + self.loss_weight * loss_ce
 
-        self.log("val_loss",
-                 loss,
-                 on_epoch=True,
-                 prog_bar=True,
-                 logger=True,
-                 sync_dist=True,
-                 batch_size=len(batch)
-                 )
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
 
         return {"val_loss": loss}
 
@@ -139,9 +131,7 @@ class MultiModalFlowBridge(L.LightningModule):
         loss_ce = loss_ce.view(len(batch), -1) * mutlimodal_state.mask.squeeze(-1)    # (B, D)
         loss_ce = loss_ce.sum() / mutlimodal_state.mask.sum()
 
-        loss = loss_mse + self.loss_weight * loss_ce
-
-        return loss
+        return loss_mse, loss_ce
 
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
