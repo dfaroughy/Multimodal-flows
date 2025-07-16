@@ -5,7 +5,7 @@ import torch.nn.utils.weight_norm as wn
 
 
 
-class UniModalEPiC(nn.Module):
+class EPiC(nn.Module):
     def __init__(self, config):
         super().__init__()
 

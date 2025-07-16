@@ -29,11 +29,10 @@ class MarkovJumpBridge(L.LightningModule):
         self.time_eps=config.time_eps
         self.temperature = config.temperature
         self.num_timesteps = config.num_timesteps
-        self.path_snapshots_idx = False
 
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
         
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat, self.temperature)        
+        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
         self.model = FlavorFormer(config)
         
         self.save_hyperparameters()
@@ -46,30 +45,20 @@ class MarkovJumpBridge(L.LightningModule):
     def training_step(self, batch: DataCoupling, batch_idx):
 
         loss = self.loss(batch)
-
-        self.log("train_loss",
-                 loss,
-                 on_epoch=True,
-                 prog_bar=True,
-                 logger=True,
-                 sync_dist=True,
-                 batch_size=len(batch)
-                 )
-
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch) )
+        
+        if hasattr(self.model, 'lambda_u'):
+            self.log("lambda_u_train", self.model.lambda_u.item(), on_epoch=True, prog_bar=True, sync_dist=True, batch_size=len(batch))
+        
         return {"loss": loss}
         
     def validation_step(self, batch: DataCoupling, batch_idx):
 
         loss = self.loss(batch)
-
-        self.log("val_loss",
-                 loss,
-                 on_epoch=True,
-                 prog_bar=True,
-                 logger=True,
-                 sync_dist=True,
-                 batch_size=len(batch)
-                 )
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch) )
+        
+        if hasattr(self.model, 'lambda_u'):
+            self.log("lambda_u_val", self.model.lambda_u.item(), on_epoch=True, prog_bar=True, sync_dist=True, batch_size=len(batch))
 
         return {"val_loss": loss}
 
@@ -112,15 +101,16 @@ class MarkovJumpBridge(L.LightningModule):
         # sample continuous state from bridge
 
         kt = self.bridge_discrete.sample(time, batch)
-        state = TensorMultiModal(time=time, discrete=kt.discrete, mask=batch.target.mask)
+        state = TensorMultiModal(discrete=kt, mask=batch.target.mask, time=time)
         state = state.to(self.device)
 
         # compute loss
 
-        logits = self.model(state)                            
+        logits = self.model(state)  
+
         targets = batch.target.discrete.to(self.device)        
-        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1), reduction='none')    # (B*D,)
-        loss_ce = loss_ce.view(len(batch), -1) * state.mask    # (B, D)
+        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1), ignore_index=0, reduction='none')    # (B*D,)
+        loss_ce = loss_ce.view(len(batch), -1) * state.mask.squeeze(-1)    # (B, D)
         loss_ce = loss_ce.sum() / state.mask.sum() 
 
         return loss_ce
@@ -132,6 +122,7 @@ class MarkovJumpBridge(L.LightningModule):
         """
         
         solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap', temperature=self.temperature)
+
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
@@ -155,11 +146,10 @@ class RandomTelegraphBridge:
     - k: discrete state at time t
     """
 
-    def __init__(self, gamma, vocab_size, thermostat_fn, temperature=1.0):
+    def __init__(self, gamma, vocab_size, thermostat_fn):
         self.gamma = gamma
         self.vocab_size = vocab_size
         self.thermostat = thermostat_fn
-        self.temperature = temperature
 
     def rate(self, state: TensorMultiModal, logits: torch.Tensor):
         """ input:
