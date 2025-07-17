@@ -120,7 +120,7 @@ class FlavorFormer(nn.Module):
         self.n_embd = config.n_embd
         self.n_head = config.n_head
         self.vocab_size = config.vocab_size
-        self.use_pairwise = config.use_pairwise
+        self.use_pairwise = False
 
         self.transformer = nn.ModuleDict({
             'wte': nn.Embedding(config.vocab_size, config.n_embd),
@@ -130,8 +130,7 @@ class FlavorFormer(nn.Module):
             'head': nn.Linear(config.n_embd, config.vocab_size, bias=False),
         })
 
-        if self.use_pairwise:
-            # Symmetric token interaction
+        if self.use_pairwise: # Symmetric token interaction
             self.transformer['wue'] = nn.Embedding((config.vocab_size * (config.vocab_size + 1)) // 2, config.n_embd)
             self.transformer['wue_proj'] = nn.Linear(config.n_embd, config.n_head)
             self.lambda_u = nn.Parameter(torch.tensor(0.0))

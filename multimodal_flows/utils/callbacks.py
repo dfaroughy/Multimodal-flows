@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.utilities import rank_zero_only
-
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
 
@@ -106,3 +105,21 @@ class GPTGeneratorCallback(Callback):
     def _clean_temp_files(self):
         for f in self.experiment_dir.glob(f"temp_data_*.pt"):
             f.unlink()
+
+
+class SaveConfigCallback(Callback):
+    """After Comet has created its run folder, write out our CLI config.yaml once."""
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+    @rank_zero_only
+    def on_fit_start(self, trainer, pl_module):
+
+        if self.config.experiment_id is not None:
+            
+            path = os.path.join(self.config.dir, self.config.project, self.config.experiment_id)
+            os.makedirs(path, exist_ok=True)
+
+            with open(os.path.join(path, "config.yaml"), "w") as f:
+                yaml.safe_dump(vars(self.config), f)

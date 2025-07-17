@@ -312,10 +312,10 @@ class AspenOpenJets:
             }
         
         if continuous is not None:
-            metadata["mean"] = continuous[mask_bool].mean(0)
-            metadata["std"] = continuous[mask_bool].std(0)
-            metadata["min"] = continuous[mask_bool].min(0)
-            metadata["max"] = continuous[mask_bool].max(0)
+            metadata["mean"] = continuous[mask_bool].mean(0).tolist()
+            metadata["std"] = continuous[mask_bool].std(0).tolist()
+            metadata["min"] = continuous[mask_bool].min(0)[0].tolist()
+            metadata["max"] = continuous[mask_bool].max(0)[0].tolist()
 
         # metadata["categorical_probs"] = hist.tolist()
         return metadata

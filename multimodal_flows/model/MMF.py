@@ -42,7 +42,7 @@ class MultiModalFlowBridge(L.LightningModule):
         thermostat = ConstantThermostat(self.gamma, self.vocab_size)
         
         self.bridge_continuous = UniformFlow(self.sigma)        
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat, self.temperature)        
+        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
         self.model = ParticleFormer(config)
         
         self.save_hyperparameters()
