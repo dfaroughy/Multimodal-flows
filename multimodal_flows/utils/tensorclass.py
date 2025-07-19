@@ -148,13 +148,6 @@ class TensorMultiModal:
         )
         return state.to(device) if device else state
 
-    @classmethod
-    def sample_from(cls, distribution, shape, device=None) -> "TensorMultiModal":
-        time, continuous, discrete, mask = distribution.sample(shape)
-        state = cls(time, continuous, discrete, mask)
-        if device:
-            return state.to(device)
-        return state
 
     @staticmethod
     def cat(states: List["TensorMultiModal"], dim=0) -> "TensorMultiModal":

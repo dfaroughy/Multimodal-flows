@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 from transformers import GPT2Config, GPT2LMHeadModel
 
+
+
+import math
+import inspect
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+from dataclasses import dataclass
+
+from utils.tensorclass import TensorMultiModal
+from utils.models import LayerNorm, SelfAttention, CrossAttention, transformer_timestep_embedding
+
+"""
+Full definition of a GPT Language Model, all of it in this single file.
+References:
+1) the official GPT-2 TensorFlow implementation released by OpenAI:
+https://github.com/openai/gpt-2/blob/master/src/model.py
+2) huggingface/transformers PyTorch implementation:
+https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
+"""
+
 # ───────────────────────────────────────────────────────────────────────────────
 class TimeFourierEmbedding(nn.Module):
     """
