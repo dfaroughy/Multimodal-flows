@@ -50,8 +50,8 @@ class FlowGeneratorCallback(Callback):
 
         if sample.has_continuous: # post-process continuous features
 
-            mu = self.config.metadata['mean']
-            sig = self.config.metadata['std']
+            mu = torch.tensor(self.config.metadata['mean'])
+            sig = torch.tensor(self.config.metadata['std'])
             sample.continuous = (sample.continuous * sig) + mu
 
         sample.apply_mask()  # ensure mask is applied to pads
