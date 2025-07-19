@@ -151,11 +151,11 @@ class RandomTelegraphBridge:
         self.vocab_size = vocab_size
         self.thermostat = thermostat_fn
 
-    def rate(self, state: TensorMultiModal, logits: torch.Tensor):
+    def rate(self, state: TensorMultiModal, probs: torch.Tensor):
         """ input:
             - state.time (t): (B, 1) time tensor
             - state.discrete (k) : (B, D, 1) current state tensor
-            - logits: (B, D, vocab_size) logits tensor
+            - probs: (B, D, vocab_size) probs tensor q_x
 
             output:
             - rates: (B, D, vocab_size) transition rates tensor
@@ -172,7 +172,7 @@ class RandomTelegraphBridge:
             )
         )
 
-        qx = softmax(logits, dim=2) # transition probabilities to all states
+        qx = probs # transition probabilities to all states
         qy = torch.gather(qx, 2, k.long())  # current state prob
 
         # ...Telegraph process rates:

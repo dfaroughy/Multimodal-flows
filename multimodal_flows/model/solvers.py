@@ -5,25 +5,38 @@ from torch.distributions import Categorical
 from utils.tensorclass import TensorMultiModal
 
 class HybridSolver:
-    def __init__(self, model, vocab_size, method='euler-leap', topk=None, temperature=1.0):
+    def __init__(self, model, vocab_size, method='euler-leap', T=1.0, top_k=None, top_p=None):
         self.method = method
         self.vocab_size = vocab_size
         self.model = model
-        self.topk = topk
-        self.T = temperature
+        self.T = T 
+        self.top_k = top_k
+        self.top_p = top_p
 
-    def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
+    def fwd_step(self, state, delta_t) -> TensorMultiModal:
         if self.method == "euler-leap":
-            return self.euler_leap_step(state, delta_t, last_step)
+            return self.euler_leap_step(state, delta_t)
 
-    def euler_leap_step(self, state: TensorMultiModal, delta_t: torch.Tensor, last_step: bool=False) -> TensorMultiModal:
+    def euler_leap_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
         """ - state.time (t): (B, 1) time tensor
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        vt, logits = self.model(state) 
-        logits = temperature_scaling(logits, self.T) 
-        rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
+        vt, logits = self.model(state)        
+
+        if self.T != 1.0: 
+            logits = self._temperature_scheduler(logits, state.time)
+        
+        probs = F.softmax(logits, dim=-1)
+
+        if self.top_k is not None: 
+            print(f"top-k = {self.top_k}")
+            probs = self._top_k_filter(probs)
+
+        if self.top_p is not None: 
+            probs = self._top_p_filter(probs)
+
+        rates = self.model.bridge_discrete.rate(state, probs)     # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."
         state.discrete = state.discrete.squeeze(-1)
@@ -37,40 +50,37 @@ class HybridSolver:
         state.discrete = state.discrete.unsqueeze(-1)
         state.continuous += vt * delta_t # euler step
 
-        if last_step:
-            max_rate = torch.max(rates, dim=2)[1]
-            state.discrete = max_rate.unsqueeze(-1)
+        # if last_step:
+        #     max_rate = torch.max(rates, dim=2)[1]
+        #     state.discrete = max_rate.unsqueeze(-1)
 
         return state
 
+    # rate engeneering methods:
 
-class ContinuousSolver:
-    def __init__(self, model, method='euler'):
-        self.method = method
-        self.model = model
+    def _temperature_scheduler(self, logits, time, lam=0.5):
+        scheduler = lambda t: torch.exp(-lam * t) 
+        # scheduler = lambda t: torch.sigmoid(lam * (t - 0.5))
+        temp = self.T / time # + (1.0 - self.T) * scheduler(time)
+        temp = temp.view(-1, 1, 1).to(logits.device)
+        return  logits / (temp + 1e-8)
 
-    def fwd_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
-        if state.has_continuous:
-            if self.method == "euler":
-                return self.euler_step(state, delta_t)
+    def _top_k_filter(self, probs):
+        _, idx = torch.topk(probs, self.top_k, dim=-1)
+        mask = torch.zeros_like(probs, device=probs.device).scatter_(-1, idx, 1.0)
+        probs = probs * mask.to(probs.dtype)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+        return probs
 
-            elif self.method == "euler_maruyama":
-                return self.euler_maruyama_step(state, delta_t)
-        else:
-            return state
-
-    def euler_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
-        vt = self.model(state)
-        state.continuous += vt * delta_t 
-        return state
-
-    def euler_maruyama_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
-        heads = self.model(state)
-        diffusion = self.model.bridge_continuous.diffusion(state)
-        vt = heads.continuous
-        delta_w = torch.randn_like(state.continuous)
-        state.continuous += delta_t * vt + diffusion * delta_w
-        return state
+    def _top_p_filter(self, probs):
+        probs_sort, idx = torch.sort(probs, dim=-1, descending=True)
+        probs_cum = probs_sort.cumsum(dim=-1)
+        mask = probs_cum <= self.top_p
+        mask[..., 0] = 1
+        mask = torch.zeros_like(probs, device=probs.device).scatter(-1, idx, mask.float())
+        probs = probs * mask.to(probs.dtype)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+        return probs
 
 
 class DiscreteSolver:
@@ -80,6 +90,7 @@ class DiscreteSolver:
         self.model = model
         self.topk = topk
         self.temperature = temperature
+        self.topk = topk 
 
     def fwd_step(self, state, delta_t, last_step) -> TensorMultiModal:
         if state.has_discrete:
@@ -104,7 +115,6 @@ class DiscreteSolver:
 
         logits = self.model(state)   # (B, D, vocab_size)
         logits = temperature_scaling(logits, self.temperature)  # apply temperature scaling
-        rates = self.model.bridge_discrete.rate(state, logits)  # (B, D, vocab_size)
 
         assert rates.shape == logits.shape, "Rates and logits must have the same shape."
         state.discrete = state.discrete.squeeze(-1)
@@ -204,16 +214,30 @@ class DiscreteSolver:
         return state_corrected, rates_corrected
 
 
-def temperature_scaling(logits, T=1.0):
-    """
-    Apply custom temperature scaling: logits / (T * (1 + freqs))
-    
-    logits:     Tensor of shape (B, D, vocab_size)
-    freqs:      Tensor of shape (vocab_size,) - class frequency fraction
-    T:          Scalar (float) - temperature hyperparameter
-    """
-    if isinstance(T, (list, tuple)):
-        T = torch.tensor(T).view(1, 1, -1) 
-        T = temp.to(logits.device)
+class ContinuousSolver:
+    def __init__(self, model, method='euler'):
+        self.method = method
+        self.model = model
 
-    return logits / T
+    def fwd_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
+        if state.has_continuous:
+            if self.method == "euler":
+                return self.euler_step(state, delta_t)
+
+            elif self.method == "euler_maruyama":
+                return self.euler_maruyama_step(state, delta_t)
+        else:
+            return state
+
+    def euler_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
+        vt = self.model(state)
+        state.continuous += vt * delta_t 
+        return state
+
+    def euler_maruyama_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
+        heads = self.model(state)
+        diffusion = self.model.bridge_continuous.diffusion(state)
+        vt = heads.continuous
+        delta_w = torch.randn_like(state.continuous)
+        state.continuous += delta_t * vt + diffusion * delta_w
+        return state

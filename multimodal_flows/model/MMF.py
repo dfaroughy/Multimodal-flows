@@ -30,10 +30,12 @@ class MultiModalFlowBridge(L.LightningModule):
 
         self.max_epochs = config.max_epochs
         self.time_eps = config.time_eps
-        self.temperature = config.temperature
-        self.num_timesteps = config.num_timesteps
         self.lr_final = config.lr_final
         self.lr = config.lr
+        self.num_timesteps = config.num_timesteps
+        self.temperature = config.temperature
+        self.top_k = config.top_k
+        self.top_p = config.top_p
 
         self.gamma=config.gamma
         self.sigma=config.sigma
@@ -143,7 +145,12 @@ class MultiModalFlowBridge(L.LightningModule):
         returns the final state of the bridge at the end of the time interval
         """
         
-        solver = HybridSolver(model=self, vocab_size=self.vocab_size, method='euler-leap', temperature=self.temperature)
+        solver = HybridSolver(model=self, 
+                              vocab_size=self.vocab_size, 
+                              method='euler-leap', 
+                              T=self.temperature, 
+                              top_k=self.top_k if hasattr(self, 'top_k') else None,
+                              top_p=self.top_p if hasattr(self, 'top_p') else None)
         
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
@@ -151,9 +158,8 @@ class MultiModalFlowBridge(L.LightningModule):
         state = batch.source.clone()
         
         for i, t in enumerate(time_steps):
-            is_last_step = (i == len(time_steps) - 1)
             state.time = torch.full((len(state),), t.item(), device=self.device)  
-            state = solver.fwd_step(state, delta_t, is_last_step)
+            state = solver.fwd_step(state, delta_t)
 
         batch.target = state
 
