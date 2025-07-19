@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from model.solvers import ContinuousSolver
-from networks.ParticleTransformers import FlavorFormer
+from networks.ParticleTransformers import KinFormer
 
 class ConditionalFlowMatching(L.LightningModule):
     def __init__(self, config):
@@ -16,20 +16,20 @@ class ConditionalFlowMatching(L.LightningModule):
         super().__init__()
 
         self.sigma=config.sigma
-        self.vocab_size=config.vocab_size
+        self.dim_continuous=config.dim_continuous
         self.num_jets=config.num_jets
         self.max_num_particles=config.max_num_particles
-        self.lr_final=config.lr_final
-        self.lr=config.lr
-        self.max_epochs=config.max_epochs
-        self.time_eps=config.time_eps
-        self.num_timesteps = config.num_timesteps if hasattr(config, 'num_timesteps') else 10
-        self.mean = config.mean if hasattr(config, 'mean') else 0.0
-        self.std = config.std if hasattr(config, 'std') else 1.0
-        self.path_snapshots_idx = False
+        self.metadata = config.metadata 
+
+        self.max_epochs = config.max_epochs
+        self.time_eps = config.time_eps
+        self.num_timesteps = config.num_timesteps
+        self.lr_final = config.lr_final
+        self.lr = config.lr
+        self.sigma=config.sigma
 
         self.bridge_continuous = UniformFlow(self.sigma)        
-        self.model = FlavorFormer(config)
+        self.model = KinFormer(config)
 
         self.save_hyperparameters()
 
@@ -126,6 +126,7 @@ class ConditionalFlowMatching(L.LightningModule):
         returns the final state of the bridge at the end of the time interval
         """
         solver = ContinuousSolver(model=self, method='euler',)
+
         time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
