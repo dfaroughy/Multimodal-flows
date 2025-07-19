@@ -39,16 +39,14 @@ def set_logger(config):
 
 
 
-def load_from_experiment(config):
+def load_from_experiment(config_path):
 
-    path_to_experiment = f"{config.dir}/{config.project}/{config.experiment_id}"
+    with open(f"{config_path}/config.yaml", "r") as f:
+        config_dict = yaml.safe_load(f)
+        config = argparse.Namespace(**config_dict)
+        # run_config.max_epochs = config.max_epochs  # override max epochs if specified
 
-    with open(f"{path_to_experiment}/config.yaml", "r") as f:
-        run_dict = yaml.safe_load(f)
-        run_config = argparse.Namespace(**run_dict)
-        run_config.max_epochs = config.max_epochs  # override max epochs if specified
-
-    return run_config
+    return config
 
 
 def get_rank():

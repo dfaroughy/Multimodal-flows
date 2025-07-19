@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as L
+
 from torch.nn import functional as F
 from typing import List, Tuple, Dict, Union
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -8,30 +9,22 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from model.solvers import ContinuousSolver
-from networks.ParticleTransformers import KinFormer
+from networks.registry import MODEL_REGISTRY
 
 class ConditionalFlowMatching(L.LightningModule):
+
+    """ Dynamical generative model for continuous states
+        ODE-based Conditional Flow Matching.
+    """
+
     def __init__(self, config):
                  
         super().__init__()
 
-        self.sigma=config.sigma
-        self.dim_continuous=config.dim_continuous
-        self.num_jets=config.num_jets
-        self.max_num_particles=config.max_num_particles
-        self.metadata = config.metadata 
-
-        self.max_epochs = config.max_epochs
-        self.time_eps = config.time_eps
-        self.num_timesteps = config.num_timesteps
-        self.lr_final = config.lr_final
-        self.lr = config.lr
-        self.sigma=config.sigma
-
-        self.bridge_continuous = UniformFlow(self.sigma)        
-        self.model = KinFormer(config)
-
-        self.save_hyperparameters()
+        self.model = MODEL_REGISTRY[config.model](config)
+        self.bridge_continuous = UniformFlow(config.sigma)        
+        self.save_hyperparameters(vars(config))
+        self.config = config
 
     # ...Lightning functions
 
@@ -77,12 +70,11 @@ class ConditionalFlowMatching(L.LightningModule):
         return sample.detach().cpu()
 
     def configure_optimizers(self):
-
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.max_epochs,    # full cycle length
-            eta_min=self.lr_final,    # final LR
+            T_max=self.config.max_epochs,    # full cycle length
+            eta_min=self.config.lr_final,    # final LR
             last_epoch=-1,
         )
         return {
@@ -101,9 +93,10 @@ class ConditionalFlowMatching(L.LightningModule):
 
         """ Flow-matching MSE loss
         """
+        eps = self.config.time_eps
 
         # sample time uniformly in [eps, 1-eps], eps << 1
-        time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)
+        time = eps  + (1. - eps ) * torch.rand(len(batch), device=self.device)
 
         # sample continuous state from bridge
         xt = self.bridge_continuous.sample(time, batch)
@@ -125,11 +118,14 @@ class ConditionalFlowMatching(L.LightningModule):
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
-        solver = ContinuousSolver(model=self, method='euler',)
 
-        time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
+        print(self.config.num_jets)
+        eps = self.config.time_eps
+        steps = self.config.num_timesteps
+        time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
+        solver = ContinuousSolver(model=self, config=self.config)
         state = batch.source.clone()
         
         for i, t in enumerate(time_steps):

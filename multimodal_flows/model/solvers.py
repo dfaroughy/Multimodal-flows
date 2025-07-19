@@ -215,8 +215,8 @@ class DiscreteSolver:
 
 
 class ContinuousSolver:
-    def __init__(self, model, method='euler'):
-        self.method = method
+    def __init__(self, model, config):
+        self.method = 'euler'
         self.model = model
 
     def fwd_step(self, state: TensorMultiModal, delta_t: torch.Tensor) -> TensorMultiModal:
