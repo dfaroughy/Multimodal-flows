@@ -122,6 +122,28 @@ class CrossAttention(nn.Module):
         return y
 
 
+class TimeFourierEmbedding(nn.Module):
+    """
+    Turn a scalar t∈[0,1] into a D-dim Fourier feature vector:
+      [ sin(t * ω₁), …, sin(t * ω_{D/2}), cos(t * ω₁), …, cos(t * ω_{D/2}) ]
+    with frequencies ω log-spaced from 1 to max_freq.
+    """
+    def __init__(self, dim: int, max_freq: float = 10.0):
+        super().__init__()
+        half = dim // 2
+        inv_freq = 1.0 / ( max_freq ** (torch.arange(half).float() / (half - 1)) )
+        self.register_buffer("inv_freq", inv_freq)   # (D/2,)
+
+    def forward(self, t: torch.Tensor):
+        # t: (B, 1) or (B,) → ensure (B,1)
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        # x = t * ω_i  →  (B, D/2)
+        x = t * self.inv_freq.unsqueeze(0)
+        emb = torch.cat([x.sin(), x.cos()], dim=-1)  # (B, D)
+        return emb                                   # (B, D)
+
+
 def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000):
     # From https://github.com/yang-song/score_sde_pytorch/ which is from
     #  https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py
@@ -136,6 +158,7 @@ def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000
         emb = F.pad(emb, (0, 1), mode='constant')
     assert emb.shape == (timesteps.shape[0], embedding_dim)
     return emb
+
 
 
 def sample_tokens(logits, argmax_greedy=False, temperature=1.0, top_k=0, top_p=1.0, filter_value=-float("Inf"), min_tokens_to_keep=1):

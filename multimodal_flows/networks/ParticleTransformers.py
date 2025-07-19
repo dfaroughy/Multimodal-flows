@@ -120,7 +120,7 @@ class FlavorFormer(nn.Module):
         self.n_embd = config.n_embd
         self.n_head = config.n_head
         self.vocab_size = config.vocab_size
-        self.use_pairwise = False
+        self.max_num_particles = config.max_num_particles
 
         self.transformer = nn.ModuleDict({
             'wte': nn.Embedding(config.vocab_size, config.n_embd),
@@ -130,7 +130,10 @@ class FlavorFormer(nn.Module):
             'head': nn.Linear(config.n_embd, config.vocab_size, bias=False),
         })
 
-        if self.use_pairwise: # Symmetric token interaction
+        if config.use_pos_emb: # Positional embeddings
+            self.transformer['wpe'] = nn.Embedding(config.max_num_particles, config.n_embd)
+
+        if config.use_pairwise: # Symmetric token interaction U
             self.transformer['wue'] = nn.Embedding((config.vocab_size * (config.vocab_size + 1)) // 2, config.n_embd)
             self.transformer['wue_proj'] = nn.Linear(config.n_embd, config.n_head)
             self.lambda_u = nn.Parameter(torch.tensor(0.0))
@@ -144,14 +147,19 @@ class FlavorFormer(nn.Module):
 
         # Initial embeddings
 
-        if self.use_pairwise:
-            U_emb = self.token_interactions_emb(tokens)  
-            attn_mask = attn_mask + self.lambda_u * U_emb       
-
-        tok_emb = self.transformer.wte(tokens)                              # (B, D, n_embd)
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
         time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
+        tok_emb = self.transformer.wte(tokens)                              # (B, D, n_embd)
 
+        if hasattr(self.transformer, 'wpe'):
+            pos = torch.arange(0, self.max_num_particles, dtype=torch.long, device=state.time.device)    # shape (D)
+            pos_emb = self.transformer.wpe(pos)  # (D, n_embd)
+            tok_emb += pos_emb.view(1, self.max_num_particles , self.n_embd)
+
+        if hasattr(self.transformer, 'wue'):
+            U_emb = self.token_interactions_emb(tokens)  
+            attn_mask = attn_mask + self.lambda_u * U_emb   
+            
         # transformer blocks
 
         f = self.transformer.drop(tok_emb + time_emb)
@@ -181,6 +189,100 @@ class FlavorFormer(nn.Module):
         U_emb = self.transformer.wue(U)                        # (B, D, D, n_embd)
         U_emb = self.transformer.wue_proj(U_emb)               # (B, D, D, n_head)
         return U_emb.permute(0, 3, 1, 2)                       # (B, n_head, D, D)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)      
+
+
+class KinFormer(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+
+        self.n_embd = config.n_embd
+        self.n_head = config.n_head
+        self.max_num_particles = config.max_num_particles
+        self.mu = config.metadata['mean']
+        self.sig = config.metadata['std']
+
+        self.transformer = nn.ModuleDict({
+            'wxe': nn.Linear(config.dim_continuous, config.n_embd),
+            'drop': nn.Dropout(config.dropout),
+            'blocks': nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            'ln': LayerNorm(config.n_embd, bias=config.bias),
+            'head': nn.Linear(config.n_embd, config.dim_continuous, bias=False),
+        })
+
+        if config.use_pos_emb: # Positional embeddings 
+            self.transformer['wpe'] = nn.Embedding(config.max_num_particles, config.n_embd)
+
+        if config.use_pairwise: # particle interactions with (deltaR, k_t) lund observables
+            self.transformer['wue'] = nn.Sequential(nn.Linear(2, config.n_embd),
+                                                    nn.GELU(),
+                                                    nn.LayerNorm(config.n_embd))
+
+            self.transformer['wue_proj'] = nn.Sequential(nn.Linear(config.n_embd, config.n_embd, bias=config.bias),
+                                                         nn.GELU(),
+                                                         nn.Linear(config.n_embd, config.n_head, bias=config.bias)
+                                                         )
+            self.lambda_u = nn.Parameter(torch.tensor(0.0))
+
+        self.apply(self._init_weights)
+
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
+
+        attn_mask = self.get_attention_mask(state)  # (B, n_head, D, D)
+
+        # Initial embeddings
+
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
+        time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
+        x_emb = self.transformer.wxe(state.continuous)             # feature embeddings of shape (B, D, n_embd)
+
+        if hasattr(self.transformer, 'wpe'):
+            pos = torch.arange(0, self.max_num_particles, dtype=torch.long, device=state.time.device)    # shape (D)
+            pos_emb = self.transformer.wpe(pos)  # (D, n_embd)
+            x_emb += pos_emb.view(1, self.max_num_particles, self.n_embd)
+
+        if hasattr(self.transformer, 'wue'):
+            U_emb = self.particle_interactions_emb(x_emb)  
+            attn_mask = attn_mask + self.lambda_u * U_emb   
+            
+        # transformer blocks
+
+        x = self.transformer.drop(x_emb + time_emb)
+        x_skip = x.clone()
+
+        for block in self.transformer.blocks:
+            x = block(x, attn_mask=attn_mask)
+            x += time_emb
+
+        x = self.transformer.ln(x + x_skip)
+
+        return self.transformer.head(x)
+
+    def get_attention_mask(self, state):
+        attn_mask = state.mask.bool().squeeze(-1)
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)
+        return attn_mask.float().expand(-1, self.n_head, -1, -1)
+
+    def particle_interactions_emb(self, kin):
+        
+        U = lund_observables(kin, self.mu, self.sig)   # (B, D, D, 5) 
+        U_emb = self.transformer.wue(U)                    # (B, D, D, n_embd)
+        U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
+        
+        U_emb = self.transformer.wue_proj(U_emb)           # (B, D, D, n_head)
+        U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
+
+        return U_emb.permute(0, 3, 1, 2)                   # (B, n_head, D, D)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -238,3 +340,34 @@ class CrossBlock(nn.Module):
         x = x + self.attn(self.ln_1(x), self.ln_2(z),  attn_mask=attn_mask)
         x = x + self.mlp(self.ln_3(x))
         return x
+
+
+def lund_observables(kin, mu=1.0, sig=1.0):
+
+    # kin = x.clone()  # (B, D, 3)
+    # kin = kin * sig.view(-1,-1) + mu # destandardize 
+
+    pt_i, pt_j = kin[..., 0].unsqueeze(2), kin[..., 0].unsqueeze(1)         # (B, D, 1), (B, 1, D)
+    eta_i, eta_j = kin[..., 1].unsqueeze(2), kin[..., 1].unsqueeze(1)
+    phi_i, phi_j = kin[..., 2].unsqueeze(2), kin[..., 2].unsqueeze(1)
+
+    # pairwise observables (B, D, D)
+
+    z = torch.minimum(pt_i, pt_j) / (pt_i * pt_j) 
+    deta = eta_i - eta_j
+    dphi = torch.remainder(phi_i - phi_j + torch.pi, 2 * torch.pi) - torch.pi  
+
+    # lund observables  (B, D, D)
+
+    log_dR = torch.log(torch.sqrt(deta ** 2 + dphi ** 2 + 1e-8)) 
+    log_kt = torch.log(z * (deta ** 2 + dphi ** 2) + 1e-8)
+    # log_z = torch.log(z + 1e-8)  
+    # log_dR = torch.log(torch.sqrt(deta ** 2 + dphi ** 2 + 1e-8)) 
+    # log_psi = torch.log(torch.abs(torch.arctan2(delta_eta, delta_phi) ) + 1e-8)  
+    # log_kt = torch.log(z * (deta ** 2 + dphi ** 2) + 1e-8)
+    # log_m2 = torch.log(2 * pt_i * pt_j * (torch.cosh(deta) - torch.cos(dphi)) + 1e-8) 
+
+    # pairwise interaction tensor (B, D, D, 2)
+    U = torch.stack([log_kt, log_dR], dim=-1) 
+    U = (U - U.mean(dim=-1, keepdim=True)) / (U.std(dim=-1, keepdim=True) + 1e-8)
+    return U

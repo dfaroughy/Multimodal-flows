@@ -206,3 +206,20 @@ def jet_set_to_seq(part_set: TensorMultiModal, vocab_size: int):
 
     return particle_set
 
+
+
+def pt_order(state: TensorMultiModal, include_mask=False):
+
+    assert state.has_continuous, "State must have continuous features to sort by pt."
+
+    _, idx = torch.sort(state.continuous, dim=1, descending=True)
+
+    state.continuous = state.continuous[torch.arange(state.continuous.shape[0])[:, None], idx[...,0]]
+    
+    if include_mask:
+        state.mask = state.mask[torch.arange(state.mask.shape[0])[:, None], idx[...,0]]
+    
+    if state.has_discrete:
+        state.discrete = state.discrete[torch.arange(state.discrete.shape[0])[:, None], idx[...,0]]
+    
+

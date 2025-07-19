@@ -316,6 +316,8 @@ class AspenOpenJets:
             metadata["std"] = continuous[mask_bool].std(0).tolist()
             metadata["min"] = continuous[mask_bool].min(0)[0].tolist()
             metadata["max"] = continuous[mask_bool].max(0)[0].tolist()
+            metadata["log_pt_mean"] = [torch.log(continuous[...,0])[mask_bool].mean(0).item()] + continuous[mask_bool].mean(0)[1:].tolist()
+            metadata["log_pt_std"] = [torch.log(continuous[...,0])[mask_bool].std(0).item()] + continuous[mask_bool].std(0)[1:].tolist()
 
         # metadata["categorical_probs"] = hist.tolist()
         return metadata
