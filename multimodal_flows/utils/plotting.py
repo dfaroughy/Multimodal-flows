@@ -9,7 +9,7 @@ from typing import Union
 
 from utils.metrics import flavor_mutliplicities
 from utils.tensorclass import TensorMultiModal
-
+from utils.aoj import JetFeatures   
 
 def plot_hist_and_ratio(test, 
                         gen,  
@@ -120,10 +120,6 @@ def plot_hist_and_ratio(test,
         ax_hist.set_ylim(*ylim)
 
 
-
-
-
-
 def plot_flavor_feats(sample: Union[TensorMultiModal, torch.Tensor], test: Union[TensorMultiModal, torch.Tensor], path=None):
     """
     Plot the flavor multiplicities of the sample and particle_set tensors.
@@ -148,6 +144,87 @@ def plot_flavor_feats(sample: Union[TensorMultiModal, torch.Tensor], test: Union
         sns.histplot(feats_test[key], discrete=True, stat="density", element="step", fill=False, ax=ax[i // 4, i % 4], lw=1, ls='-')
         sns.histplot(feat, discrete=True, stat="density", element="step", fill=False, ax=ax[i // 4, i % 4], lw=1, ls='--')
         ax[i // 4, i % 4].set_xlabel(key)
+
+    plt.tight_layout()
+
+    for a in ax.flatten():
+        a.legend([], [], frameon=False)
+
+    if path: plt.savefig(path, dpi=500, bbox_inches='tight')
+    else: plt.show()
+
+
+def plot_kin_feats(sample, test, path=None):
+
+
+    fig, ax = plt.subplots(3, 4, figsize=(10, 8))
+
+    # particle level
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt[test.constituents.mask_bool].numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt[sample.constituents.mask_bool].numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    ax[0,0].set_xlabel(r"$p_T$ [GeV]", fontsize=10)
+
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_rel[test.constituents.mask_bool].numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_rel[sample.constituents.mask_bool].numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,1], log_scale=(False, True), lw=0.75)
+    ax[0,1].set_xlabel(r"$\Delta\eta$", fontsize=10)
+
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.phi_rel[test.constituents.mask_bool].numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,2], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.phi_rel[sample.constituents.mask_bool].numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,2], log_scale=(False, True), lw=0.75)
+    ax[0,2].set_xlabel(r"$\Delta\phi$", fontsize=10)
+
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.multiplicity.numpy(),  bins=bins, discrete=True, stat="density", element="step", fill=False, ax=ax[0,3], lw=0.75)
+    sns.histplot(sample.constituents.multiplicity.numpy(),  bins=bins, discrete=True, stat="density", element="step", fill=False, ax=ax[0,3], lw=0.75)
+    ax[0,3].set_xlabel(r"$\Delta\phi$", fontsize=10)
+
+    # jet level
+
+    bins = np.linspace(100, 700, 100)
+    sns.histplot(test.pt.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0],  lw=0.75)
+    sns.histplot(sample.pt.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0],  lw=0.75)
+    ax[1,0].set_xlabel(r"$p_T$ [GeV]", fontsize=10)
+
+
+    bins = np.linspace(-.1, .1, 100)
+    sns.histplot(test.eta.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,1],  lw=0.75)
+    sns.histplot(sample.eta.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,1], lw=0.75)
+    ax[1,1].set_xlabel(r"$\eta$", fontsize=10)
+
+    bins = np.linspace(-.1, .1, 100)
+    sns.histplot(test.phi.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], lw=0.75)
+    sns.histplot(sample.phi.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], lw=0.75)
+    ax[1,2].set_xlabel(r"$\phi$", fontsize=10)
+
+    bins = np.linspace(0, 400, 100)
+    sns.histplot(test.m.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,3], lw=0.75) 
+    sns.histplot(sample.m.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,3], lw=0.75)
+    ax[1,3].set_xlabel(r"mass [GeV]", fontsize=10)
+
+    # substructure
+
+    bins = np.linspace(0, .3, 100)
+    sns.histplot(test.c1, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,0], lw=0.75)
+    sns.histplot(sample.c1, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,0], lw=0.75)
+    ax[2,0].set_xlabel(r"$C_1$", fontsize=10)
+
+    bins = np.linspace(0, 12, 100)
+    sns.histplot(test.d2, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,1], lw=0.75)
+    sns.histplot(sample.d2, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,1], lw=0.75)
+    ax[2,1].set_xlabel(r"$D_2$", fontsize=10)
+
+    bins = np.linspace(0, 1, 100)
+    sns.histplot(test.tau21, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,2],  lw=0.75)
+    sns.histplot(sample.tau21, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,2],  lw=0.75)
+    ax[2,2].set_xlabel(r"$\tau_{21}$", fontsize=10)
+
+    bins = np.linspace(0, 1, 100)
+    sns.histplot(test.tau32, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,3],  lw=0.75)
+    sns.histplot(sample.tau32, bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,3],  lw=0.75)
+    ax[2,3].set_xlabel(r"$\tau_{32}$", fontsize=10)
 
     plt.tight_layout()
 

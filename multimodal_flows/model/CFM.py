@@ -118,8 +118,7 @@ class ConditionalFlowMatching(L.LightningModule):
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
-
-        print(self.config.num_jets)
+        
         eps = self.config.time_eps
         steps = self.config.num_timesteps
         time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)

@@ -44,7 +44,6 @@ def load_from_experiment(config_path):
     with open(f"{config_path}/config.yaml", "r") as f:
         config_dict = yaml.safe_load(f)
         config = argparse.Namespace(**config_dict)
-        # run_config.max_epochs = config.max_epochs  # override max epochs if specified
 
     return config
 

@@ -208,8 +208,8 @@ class KinFormer(nn.Module):
         self.n_embd = config.n_embd
         self.n_head = config.n_head
         self.max_num_particles = config.max_num_particles
-        self.mu = config.metadata['mean']
-        self.sig = config.metadata['std']
+        self.mu = torch.tensor(config.metadata['mean'])
+        self.sig = torch.tensor(config.metadata['std'])
 
         self.transformer = nn.ModuleDict({
             'wxe': nn.Linear(config.dim_continuous, config.n_embd),
@@ -251,7 +251,7 @@ class KinFormer(nn.Module):
             x_emb += pos_emb.view(1, self.max_num_particles, self.n_embd)
 
         if hasattr(self.transformer, 'wue'):
-            U_emb = self.particle_interactions_emb(x_emb)  
+            U_emb = self.particle_interactions_emb(state)  
             attn_mask = attn_mask + self.lambda_u * U_emb   
             
         # transformer blocks
@@ -275,7 +275,7 @@ class KinFormer(nn.Module):
 
     def particle_interactions_emb(self, kin):
         
-        U = lund_observables(kin, self.mu, self.sig)   # (B, D, D, 5) 
+        U = lund_observables(kin, self.mu, self.sig)   # (B, D, D, 2) 
         U_emb = self.transformer.wue(U)                    # (B, D, D, n_embd)
         U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
         
@@ -342,25 +342,25 @@ class CrossBlock(nn.Module):
         return x
 
 
-def lund_observables(kin, mu=1.0, sig=1.0):
+def lund_observables(state, mu=1.0, sig=1.0):
 
-    # kin = x.clone()  # (B, D, 3)
-    # kin = kin * sig.view(-1,-1) + mu # destandardize 
-
+    dim = state.continuous.size(-1)
+    kin = state.continuous.clone()  # (B, D, 3)
+    kin = kin * sig.view(1,1,dim).to(kin.device) + mu.view(1,1,dim).to(kin.device) # destandardize 
+    kin *= state.mask
+    
     pt_i, pt_j = kin[..., 0].unsqueeze(2), kin[..., 0].unsqueeze(1)         # (B, D, 1), (B, 1, D)
     eta_i, eta_j = kin[..., 1].unsqueeze(2), kin[..., 1].unsqueeze(1)
     phi_i, phi_j = kin[..., 2].unsqueeze(2), kin[..., 2].unsqueeze(1)
 
     # pairwise observables (B, D, D)
 
-    z = torch.minimum(pt_i, pt_j) / (pt_i * pt_j) 
     deta = eta_i - eta_j
     dphi = torch.remainder(phi_i - phi_j + torch.pi, 2 * torch.pi) - torch.pi  
-
-    # lund observables  (B, D, D)
-
-    log_dR = torch.log(torch.sqrt(deta ** 2 + dphi ** 2 + 1e-8)) 
-    log_kt = torch.log(z * (deta ** 2 + dphi ** 2) + 1e-8)
+    dR = torch.sqrt(deta**2 + dphi**2)  # deltaR
+    log_dR = torch.log(dR) 
+    log_kt = torch.log(torch.minimum(pt_i, pt_j) * dR**2 / (pt_i * pt_j)  + 1e-8)
+    lund = [log_kt, log_dR]
     # log_z = torch.log(z + 1e-8)  
     # log_dR = torch.log(torch.sqrt(deta ** 2 + dphi ** 2 + 1e-8)) 
     # log_psi = torch.log(torch.abs(torch.arctan2(delta_eta, delta_phi) ) + 1e-8)  
