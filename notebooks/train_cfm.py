@@ -40,6 +40,7 @@ def experiment_configs(exp_id_path=None):
         config.add_argument("--use_pairwise", type=bool, default=False)
         config.add_argument("--use_pos_emb", type=bool, default=False)
         config.add_argument("--n_embd", type=int, default=256)
+        config.add_argument("--n_embd_glob", type=int, default=10)
         config.add_argument("--n_inner", type=int, default=1024)
         config.add_argument("--n_layer", type=int, default=2)
         config.add_argument("--n_head", type=int, default=2)

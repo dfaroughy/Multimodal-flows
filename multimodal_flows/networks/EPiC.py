@@ -3,159 +3,64 @@ from torch import nn
 from torch.nn import functional as F
 import torch.nn.utils.weight_norm as wn
 
-
+from utils.tensorclass import TensorMultiModal
+from utils.models import transformer_timestep_embedding
 
 class EPiC(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.config = config
+        self.n_embd = config.n_embd
+        self.max_num_particles = config.max_num_particles
 
-        dim_input = (
-            config.encoder.dim_emb_time
-            + config.encoder.dim_emb_continuous
-            + config.encoder.dim_emb_discrete * config.data.dim_discrete
-        )
-
-        dim_output = (
-            config.data.dim_continuous
-            + config.data.vocab_size * config.data.dim_discrete
-        )
-
-        dim_context = (
-            config.encoder.dim_emb_time
-            + config.encoder.dim_emb_context_continuous
-            + config.encoder.dim_emb_context_discrete * config.data.dim_context_discrete
-        )
-
-        self.epic = EPiCEncoder(
-            dim_time=config.encoder.dim_emb_time,
-            dim_input_loc=dim_input,
-            dim_input_glob=dim_context,
-            dim_output_loc=dim_output,
-            dim_hid_loc=config.encoder.dim_hidden_local,
-            dim_hid_glob=config.encoder.dim_hidden_glob,
-            num_blocks=config.encoder.num_blocks,
-            use_skip_connection=config.encoder.skip_connection,
-            dropout=config.encoder.dropout,
-        )
-
-    def forward(self, state_local: TensorMultiModal, state_global: TensorMultiModal):
-        local_modes = [
-            getattr(state_local, mode) for mode in state_local.available_modes()
-        ]
-        global_modes = [
-            getattr(state_global, mode) for mode in state_global.available_modes()
-        ]
-
-        local_cat = torch.cat(local_modes, dim=-1)
-        global_cat = torch.cat(global_modes, dim=-1)
-        mask = state_local.mask
-
-        h_loc, h_glob = self.epic(state_local.time, local_cat, global_cat, mask)
-
-        if self.config.data.modality == "continuous":
-            return TensorMultiModal(continuous=h_loc, mask=mask)
-
-        elif self.config.data.modality == "discrete":
-            return TensorMultiModal(discrete=h_loc, mask=mask)
+        self.epic = nn.ModuleDict({
+            'wxe': nn.Linear(config.dim_continuous, config.n_embd),
+            'proj':  EPiCProjection(dim_time=config.n_embd,
+                                    dim_loc=config.n_embd,
+                                    dim_glob=config.n_embd,
+                                    dim_hid_loc=config.n_embd,
+                                    dim_hid_glob=config.n_embd_glob,
+                                    pooling_fn=self._meansum_pool,
+                                    dropout=config.dropout,
+                                    ),
+            'layers': nn.ModuleList([EPiCLayer(dim_time=config.n_embd,
+                                               dim_loc=config.n_embd,
+                                               dim_glob=config.n_embd_glob,
+                                               dim_hid_loc=config.n_embd,
+                                               dim_hid_glob=config.n_embd_glob,
+                                               pooling_fn=self._meansum_pool,
+                                               dropout=config.dropout,
+                                               ) for _ in range(config.n_layer)]),
+            'head':  nn.Linear(2 * config.n_embd + config.n_embd_glob, config.dim_continuous)
+            })
 
 
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
 
+        mask = state.mask   # (B, D, 1)
 
-class EPiCEncoder(nn.Module):
-    def __init__(
-        self,
-        dim_time: int,
-        dim_input_loc: int,
-        dim_input_glob: int,
-        dim_output_loc: int,
-        num_blocks: int = 6,
-        dim_hid_loc: int = 128,
-        dim_hid_glob: int = 10,
-        use_skip_connection: bool = False,
-        project_input: bool = True,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
+        x_emb = self.epic.wxe(state.continuous)  # feature embeddings of shape (B, D, n_embd)
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)  
+        time_glob = time_emb.clone()                                        # (B, n_embd)
+        time_emb = self._broadcast_global(time_emb, x_emb)                  # (B, D, n_embd)
 
-        # ...model params:
-        self.num_blocks = num_blocks
-        self.use_skip_connection = use_skip_connection
+        x_local, x_global = self.epic.proj(time_emb, x_emb, time_glob, mask)
+        x_local_skip = x_local.clone() 
+        x_global_skip = x_global.clone() 
 
-        # ...components:
-        
-        self.epic_layers = nn.ModuleList()
-
-        if project_input:
-            self.epic_proj = EPiCProjection(
-                dim_time=dim_time,
-                dim_loc=dim_input_loc,
-                dim_glob=dim_input_glob,
-                dim_hid_loc=dim_hid_loc,
-                dim_hid_glob=dim_hid_glob,
-                pooling_fn=self._meansum_pool,
-                dropout=dropout,
-            )
-        else:
-            self.epic_layers.append(
-            EPiCLayer(
-                dim_time=dim_time,
-                dim_loc=dim_input_loc,
-                dim_glob=dim_input_glob,
-                dim_hid_loc=dim_hid_loc,
-                dim_hid_glob=dim_hid_glob,
-                pooling_fn=self._meansum_pool,
-                dropout=dropout,
-                )
-            )
-            self.num_blocks -= 1
-
-        for _ in range(self.num_blocks):
-            self.epic_layers.append(
-                EPiCLayer(
-                    dim_time=dim_time,
-                    dim_loc=dim_hid_loc,
-                    dim_glob=dim_hid_glob,
-                    dim_hid_loc=dim_hid_loc,
-                    dim_hid_glob=dim_hid_glob,
-                    pooling_fn=self._meansum_pool,
-                    dropout=dropout,
-                )
-            )
-
-        self.output_layer = wn(
-            nn.Linear(dim_time + dim_hid_loc + dim_hid_glob, dim_output_loc)
-        )
-
-    def forward(self, time_local, x_local, x_global, mask=None):
-        """Input shapes:
-         - time_local = (B, D, dim_time_emb)
-         - x_local = (B, D, dim_local)
-         - x_global = (B, dim_global)  
-         """
-
-        # ...Projection network:
-
-        if hasattr(self, "epic_proj"):
-            x_local, x_global = self.epic_proj(time_local, x_local, x_global, mask)
-        
-        x_local_skip = x_local.clone() if self.use_skip_connection else 0
-        x_global_skip = x_global.clone() if self.use_skip_connection else 0
-
-        # ...EPiC layers:
-        for i in range(self.num_blocks):
-            x_local, x_global = self.epic_layers[i](time_local, x_local, x_global, mask)
+        for layer in self.epic.layers:
+            x_local, x_global = layer(time_emb, x_local, x_global, mask)
             x_local += x_local_skip
             x_global += x_global_skip
-
+            
         # ... final layer
+        
         out_global = x_global.clone()
         x_global = self._broadcast_global(x_global, local=x_local)
-        h = torch.cat([time_local, x_local, x_global], dim=-1)
-        out_local = self.output_layer(h)
+        h = torch.cat([time_emb, x_local, x_global], dim=-1)
 
-        return out_local, out_global
+        return self.epic.head(h)
+
 
     def _meansum_pool(self, mask, x_local, *x_global, scale=0.01):
         """masked pooling local features with mean and sum

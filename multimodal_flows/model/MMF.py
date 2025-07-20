@@ -18,36 +18,19 @@ from networks.ParticleTransformers import ParticleFormer
 
 
 class MultiModalFlowBridge(L.LightningModule):
-    def __init__(self, config):
-                 
+    def __init__(self, config, model):
+
+        """ Hybrid Dynamical generative model for continuous and discrete states
+            based on continuous-time Markov jump processes and flow matching.
+        """                 
         super().__init__()
 
-        self.dim_continuous = config.dim_continuous
-        self.vocab_size = config.vocab_size
-        self.num_jets = config.num_jets
-        self.max_num_particles = config.max_num_particles
-        self.metadata = config.metadata 
-
-        self.max_epochs = config.max_epochs
-        self.time_eps = config.time_eps
-        self.lr_final = config.lr_final
-        self.lr = config.lr
-        self.num_timesteps = config.num_timesteps
-        self.temperature = config.temperature
-        self.top_k = config.top_k
-        self.top_p = config.top_p
-
-        self.gamma=config.gamma
-        self.sigma=config.sigma
-        self.loss_weight = config.loss_weight
-
-        thermostat = ConstantThermostat(self.gamma, self.vocab_size)
-        
-        self.bridge_continuous = UniformFlow(self.sigma)        
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
-        self.model = ParticleFormer(config)
-        
-        self.save_hyperparameters()
+        self.config = config
+        thermostat = ConstantThermostat(config.gamma, config.vocab_size)
+        self.model = model(config)
+        self.bridge_continuous = UniformFlow(config.sigma)        
+        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)        
+        self.save_hyperparameters(vars(config))
 
     # ...Lightning functions
 

@@ -11,31 +11,23 @@ from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import DiscreteSolver
-from networks.ParticleTransformers import FlavorFormer
 
 
 class MarkovJumpBridge(L.LightningModule):
-    def __init__(self, config):
+
+    """ Dynamical generative model for discrete states
+        based on continuous-time Markov jump processes
+    """ 
+
+    def __init__(self, config, model: nn.Module):
                  
         super().__init__()
 
-        self.gamma=config.gamma
-        self.vocab_size=config.vocab_size
-        self.num_jets=config.num_jets
-        self.max_num_particles=config.max_num_particles
-        self.lr_final=config.lr_final
-        self.lr=config.lr
-        self.max_epochs=config.max_epochs
-        self.time_eps=config.time_eps
-        self.temperature = config.temperature
-        self.num_timesteps = config.num_timesteps
-
-        thermostat = ConstantThermostat(self.gamma, self.vocab_size)
-        
-        self.bridge_discrete = RandomTelegraphBridge(self.gamma, self.vocab_size, thermostat)        
-        self.model = FlavorFormer(config)
-        
-        self.save_hyperparameters()
+        self.config = config
+        thermostat = ConstantThermostat(config.gamma, config.vocab_size)
+        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)        
+        self.model = model(config)
+        self.save_hyperparameters(vars(config))
 
     # ...Lightning functions
 
@@ -70,11 +62,11 @@ class MarkovJumpBridge(L.LightningModule):
         return sample.detach().cpu()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.max_epochs,  # full cycle length
-            eta_min=self.lr_final,  # final LR
+            T_max=self.config.max_epochs,  # full cycle length
+            eta_min=self.config.lr_final,  # final LR
             last_epoch=-1,         
         )
         return {
@@ -94,9 +86,8 @@ class MarkovJumpBridge(L.LightningModule):
         """ Markov bridge CE loss
         """
 
-        # sample time uniformly in [eps, 1-eps], eps << 1
-
-        time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)  # (B,)
+        eps = self.config.time_eps
+        time = eps  + (1. - eps ) * torch.rand(len(batch), device=self.device)  # (B,)
 
         # sample continuous state from bridge
 
@@ -109,7 +100,7 @@ class MarkovJumpBridge(L.LightningModule):
         logits = self.model(state)  
 
         targets = batch.target.discrete.to(self.device)        
-        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1), ignore_index=0, reduction='none')    # (B*D,)
+        loss_ce =  F.cross_entropy(logits.view(-1, self.config.vocab_size), targets.view(-1), ignore_index=0, reduction='none')    # (B*D,)
         loss_ce = loss_ce.view(len(batch), -1) * state.mask.squeeze(-1)    # (B, D)
         loss_ce = loss_ce.sum() / state.mask.sum() 
 
@@ -120,12 +111,13 @@ class MarkovJumpBridge(L.LightningModule):
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
-        
-        solver = DiscreteSolver(model=self, vocab_size=self.vocab_size, method='tauleap', temperature=self.temperature)
 
-        time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
+        eps = self.config.time_eps
+        steps = self.config.num_timesteps
+        time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
+        solver = DiscreteSolver(model=self, config=self.config)
         state = batch.source.clone()
         
         for i, t in enumerate(time_steps):
