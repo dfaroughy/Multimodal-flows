@@ -123,11 +123,16 @@ class FlavorFormer(nn.Module):
         self.max_num_particles = config.max_num_particles
 
         self.transformer = nn.ModuleDict({
-            'wte': nn.Embedding(config.vocab_size, config.n_embd),
+            'wte': nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
+                                 nn.GELU(),
+                                 nn.Linear(config.n_embd, config.n_embd)),
+            'ln1': LayerNorm(config.n_embd),
             'drop': nn.Dropout(config.dropout),
             'blocks': nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            'ln': LayerNorm(config.n_embd, bias=config.bias),
-            'head': nn.Linear(config.n_embd, config.vocab_size, bias=False),
+            'ln2': LayerNorm(config.n_embd),
+            'head': nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
+                                  nn.GELU(),
+                                  nn.Linear(config.n_inner, config.dim_continuous)),
         })
 
         if config.use_pos_emb: # Positional embeddings
@@ -142,15 +147,21 @@ class FlavorFormer(nn.Module):
 
     def forward(self, state: TensorMultiModal) -> torch.Tensor:
 
+        attn_mask = state.mask.clone()
+        attn_mask = state.mask.bool().squeeze()                   # (B, D) 
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
+        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
+
         tokens = state.discrete.squeeze(-1)
-        attn_mask = self.get_attention_mask(state)  # (B, n_head, D, D)
 
         # Initial embeddings
 
+        tok_emb = self.transformer.wte(tokens)                              # (B, D, n_embd)
+        tok_emb = self.transformer.ln1(tok_emb)
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
         time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
-        tok_emb = self.transformer.wte(tokens)                              # (B, D, n_embd)
-
+        
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, self.max_num_particles, dtype=torch.long, device=state.time.device)    # shape (D)
             pos_emb = self.transformer.wpe(pos)  # (D, n_embd)
@@ -169,7 +180,7 @@ class FlavorFormer(nn.Module):
             f = block(f, attn_mask=attn_mask)
             f += time_emb
 
-        f = self.transformer.ln(f + f_skip)
+        f = self.transformer.ln2(f + f_skip)
 
         return self.transformer.head(f)
 
@@ -212,11 +223,16 @@ class KinFormer(nn.Module):
         self.sig = torch.tensor(config.metadata['std'])
 
         self.transformer = nn.ModuleDict({
-            'wxe': nn.Linear(config.dim_continuous, config.n_embd),
+            'wxe': nn.Sequential(nn.Linear(config.dim_continuous, config.n_embd, bias=config.bias),
+                                 nn.GELU(),
+                                 nn.Linear(config.n_embd, config.n_embd, bias=config.bias)),
+            'ln1': LayerNorm(config.n_embd, bias=config.bias),
             'drop': nn.Dropout(config.dropout),
             'blocks': nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            'ln': LayerNorm(config.n_embd, bias=config.bias),
-            'head': nn.Linear(config.n_embd, config.dim_continuous, bias=False),
+            'ln2': LayerNorm(config.n_embd, bias=config.bias),
+            'head': nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias),
+                                  nn.GELU(),
+                                  nn.Linear(config.n_inner, config.dim_continuous, bias=config.bias)),
         })
 
         if config.use_pos_emb: # Positional embeddings 
@@ -237,13 +253,18 @@ class KinFormer(nn.Module):
 
     def forward(self, state: TensorMultiModal) -> torch.Tensor:
 
-        attn_mask = self.get_attention_mask(state)  # (B, n_head, D, D)
+        attn_mask = state.mask.clone()
+        attn_mask = state.mask.bool().squeeze()                   # (B, D) 
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
+        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
 
         # Initial embeddings
 
+        x_emb = self.transformer.wxe(state.continuous)                      # feature embeddings of shape (B, D, n_embd)
+        x_emb = self.transformer.ln1(x_emb)
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
         time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
-        x_emb = self.transformer.wxe(state.continuous)             # feature embeddings of shape (B, D, n_embd)
 
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, self.max_num_particles, dtype=torch.long, device=state.time.device)    # shape (D)
@@ -263,15 +284,9 @@ class KinFormer(nn.Module):
             x = block(x, attn_mask=attn_mask)
             x += time_emb
 
-        x = self.transformer.ln(x + x_skip)
+        x = self.transformer.ln2(x + x_skip)
 
         return self.transformer.head(x)
-
-    def get_attention_mask(self, state):
-        attn_mask = state.mask.bool().squeeze(-1)
-        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)
-        attn_mask = attn_mask & attn_mask.transpose(-1, -2)
-        return attn_mask.float().expand(-1, self.n_head, -1, -1)
 
     def particle_interactions_emb(self, kin):
         

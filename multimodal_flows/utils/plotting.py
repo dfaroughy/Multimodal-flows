@@ -161,7 +161,7 @@ def plot_kin_feats(sample, test, path=None):
 
     # particle level
 
-    bins = np.linspace(0, 500, 100)
+    bins = np.linspace(0, 700, 100)
     sns.histplot(test.constituents.pt[test.constituents.mask_bool].numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
     sns.histplot(sample.constituents.pt[sample.constituents.mask_bool].numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
     ax[0,0].set_xlabel(r"$p_T$ [GeV]", fontsize=10)
@@ -183,7 +183,7 @@ def plot_kin_feats(sample, test, path=None):
 
     # jet level
 
-    bins = np.linspace(100, 700, 100)
+    bins = np.linspace(200, 700, 100)
     sns.histplot(test.pt.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0],  lw=0.75)
     sns.histplot(sample.pt.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0],  lw=0.75)
     ax[1,0].set_xlabel(r"$p_T$ [GeV]", fontsize=10)
@@ -194,12 +194,12 @@ def plot_kin_feats(sample, test, path=None):
     sns.histplot(sample.eta.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,1], lw=0.75)
     ax[1,1].set_xlabel(r"$\eta$", fontsize=10)
 
-    bins = np.linspace(-.1, .1, 100)
+    bins = np.linspace(-.01, .01, 100)
     sns.histplot(test.phi.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], lw=0.75)
     sns.histplot(sample.phi.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], lw=0.75)
     ax[1,2].set_xlabel(r"$\phi$", fontsize=10)
 
-    bins = np.linspace(0, 400, 100)
+    bins = np.linspace(0, 250, 100)
     sns.histplot(test.m.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,3], lw=0.75) 
     sns.histplot(sample.m.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,3], lw=0.75)
     ax[1,3].set_xlabel(r"mass [GeV]", fontsize=10)
