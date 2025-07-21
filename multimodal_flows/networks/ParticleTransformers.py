@@ -184,11 +184,6 @@ class FlavorFormer(nn.Module):
 
         return self.transformer.head(f)
 
-    def get_attention_mask(self, state):
-        attn_mask = state.mask.bool().squeeze(-1)
-        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)
-        attn_mask = attn_mask & attn_mask.transpose(-1, -2)
-        return attn_mask.float().expand(-1, self.n_head, -1, -1)
 
     def token_interactions_emb(self, tokens):
         """ pairwise interactions for the tokens.
@@ -288,12 +283,11 @@ class KinFormer(nn.Module):
 
         return self.transformer.head(x)
 
-    def particle_interactions_emb(self, kin):
+    def particle_interactions_emb(self, kin): # TODO fix
         
         U = lund_observables(kin, self.mu, self.sig)   # (B, D, D, 2) 
         U_emb = self.transformer.wue(U)                    # (B, D, D, n_embd)
         U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
-        
         U_emb = self.transformer.wue_proj(U_emb)           # (B, D, D, n_head)
         U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
 
