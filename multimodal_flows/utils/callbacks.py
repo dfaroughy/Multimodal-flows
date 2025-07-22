@@ -107,19 +107,58 @@ class GPTGeneratorCallback(Callback):
             f.unlink()
 
 
-class SaveConfigCallback(Callback):
-    """After Comet has created its run folder, write out our CLI config.yaml once."""
+class TrainLoggerCallback(Callback):
+    """
+    Callback to log epoch-level metrics (from training_step/validation_step outputs)
+    *and* to log the average gates at the end of each training epoch.
+    """
+
     def __init__(self, config):
         super().__init__()
         self.config = config
+        # containers for batch‐level metrics
+        self.epoch_metrics = {"train": {}, "val": {}}
 
-    @rank_zero_only
-    def on_fit_start(self, trainer, pl_module):
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        # outputs is whatever your training_step returns
+        self._track_metrics("train", outputs)
 
-        if self.config.experiment_id is not None:
-            
-            path = os.path.join(self.config.dir, self.config.project, self.config.experiment_id)
-            os.makedirs(path, exist_ok=True)
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self._track_metrics("val", outputs)
 
-            with open(os.path.join(path, "config.yaml"), "w") as f:
-                yaml.safe_dump(vars(self.config), f)
+    def on_train_epoch_end(self, trainer, pl_module):
+        # first log the standard epoch‐averaged metrics
+        self._log_epoch_metrics("train", pl_module)
+
+        # now compute & log the average gates across all layers
+        gxs, gys = [], []
+        for block in pl_module.model.transformer.attn_blocks:
+            gxs.append(torch.sigmoid(block.gate_x))
+            gys.append(torch.sigmoid(block.gate_y))
+        avg_gx = torch.stack(gxs).mean()
+        avg_gy = torch.stack(gys).mean()
+
+        # log them—will show in prog bar and any logger (TB, WandB, etc.)
+        pl_module.log("avg_gate_x", avg_gx, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        pl_module.log("avg_gate_y", avg_gy, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        self._log_epoch_metrics("val", pl_module)
+
+    def _track_metrics(self, stage, outputs):
+        for key, val in outputs.items():
+            self.epoch_metrics[stage].setdefault(key, []).append(
+                val.detach().cpu().item() if isinstance(val, torch.Tensor) else float(val)
+            )
+
+    def _log_epoch_metrics(self, stage, pl_module):
+        for key, vals in self.epoch_metrics[stage].items():
+            epoch_avg = sum(vals) / len(vals)
+            pl_module.log(
+                key if stage=="train" else f"val_{key}",
+                epoch_avg,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+        self.epoch_metrics[stage].clear()
