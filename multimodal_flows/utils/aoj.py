@@ -173,7 +173,7 @@ class AspenOpenJets:
 
         feats, mask = self._compute_continuous_coordinates(PFCands)
         feats["tokens"] = self._map_pid_to_tokens(PFCands[:, :, -2])[:, :, None]
-        feats["onehot"] = np.eye(9)[feats["tokens"]].squeeze(2)
+        feats["onehot"] = np.eye(9)[feats["tokens"]].squeeze(2)[..., 1:] # exclude '0' padding token (vocab=8)
         mask = torch.tensor(mask[:, :, None], dtype=torch.long)
 
         for key in feats:
