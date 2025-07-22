@@ -30,21 +30,25 @@ class ParticleFormer(nn.Module):
         self.n_head = config.n_head
 
         self.transformer = nn.ModuleDict(dict(
-            wxe = nn.Linear(config.dim_continuous, config.n_embd),  # continuous emb
-            wte = nn.Embedding(config.vocab_size, config.n_embd),   # discrete emb
+            wxe = nn.Sequential(nn.Linear(config.dim_continuous, config.n_embd),
+                                 nn.GELU(),
+                                 nn.Linear(config.n_embd, config.n_embd)),
+            wte = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
+                                nn.GELU(),
+                                nn.Linear(config.n_embd, config.n_embd)),
             drop = nn.Dropout(config.dropout),
             blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             blocks_fused = nn.ModuleList([Block(config, fused=True) for _ in range(config.n_layer_fused)]),
-            ln_fused= LayerNorm(2 * config.n_embd, bias=config.bias),
-            ln_kin_last  = LayerNorm(config.n_embd, bias=config.bias),
-            ln_flv_last  = LayerNorm(config.n_embd, bias=config.bias),
-            head_kin = nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias),
+            ln_fused= LayerNorm(2 * config.n_embd),
+            ln_kin_last  = LayerNorm(config.n_embd),
+            ln_flv_last  = LayerNorm(config.n_embd),
+            head_kin = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
                                      nn.GELU(),
-                                     nn.Linear(config.n_inner, config.dim_continuous, bias=config.bias)),
-            head_flv = nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias), 
+                                     nn.Linear(config.n_inner, config.dim_continuous)),
+            head_flv = nn.Sequential(nn.Linear(config.n_embd, config.n_inner), 
                                       nn.GELU(),
-                                      nn.Linear(config.n_inner, config.vocab_size, bias=config.bias)) # classifier head for discrete tokens
+                                      nn.Linear(config.n_inner, config.vocab_size)) # classifier head for discrete tokens
         ))
 
         self.apply(self._init_weights)
@@ -77,11 +81,11 @@ class ParticleFormer(nn.Module):
 
         for block in self.transformer.blocks_kin:
             k = block(k, attn_mask=attn_mask)
-            k += time_emb
+            k = k + time_emb 
 
         for block in self.transformer.blocks_flv:
             f = block(f, attn_mask=attn_mask)
-            f += time_emb
+            f = f + time_emb 
 
         h = torch.cat((k + k_skip, f + f_skip), dim=-1)  # concatenate the continuous and discrete embeddings
         h = self.transformer.ln_fused(h)  
@@ -122,18 +126,18 @@ class FlavorFormer(nn.Module):
         self.vocab_size = config.vocab_size
         self.max_num_particles = config.max_num_particles
 
-        self.transformer = nn.ModuleDict({
-            'wte': nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
                                  nn.GELU(),
                                  nn.Linear(config.n_embd, config.n_embd)),
-            'ln1': LayerNorm(config.n_embd),
-            'drop': nn.Dropout(config.dropout),
-            'blocks': nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            'ln2': LayerNorm(config.n_embd),
-            'head': nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
+            ln1 = LayerNorm(config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln2 = LayerNorm(config.n_embd),
+            head = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
                                   nn.GELU(),
                                   nn.Linear(config.n_inner, config.dim_continuous)),
-        })
+        ))
 
         if config.use_pos_emb: # Positional embeddings
             self.transformer['wpe'] = nn.Embedding(config.max_num_particles, config.n_embd)
@@ -178,7 +182,7 @@ class FlavorFormer(nn.Module):
 
         for block in self.transformer.blocks:
             f = block(f, attn_mask=attn_mask)
-            f += time_emb
+            f = f + time_emb 
 
         f = self.transformer.ln2(f + f_skip)
 
@@ -264,7 +268,7 @@ class KinFormer(nn.Module):
         if hasattr(self.transformer, 'wpe'):
             pos = torch.arange(0, self.max_num_particles, dtype=torch.long, device=state.time.device)    # shape (D)
             pos_emb = self.transformer.wpe(pos)  # (D, n_embd)
-            x_emb += pos_emb.view(1, self.max_num_particles, self.n_embd)
+            x_emb + x_emb + pos_emb.view(1, self.max_num_particles, self.n_embd)
 
         if hasattr(self.transformer, 'wue'):
             U_emb = self.particle_interactions_emb(state)  
@@ -277,8 +281,8 @@ class KinFormer(nn.Module):
 
         for block in self.transformer.blocks:
             x = block(x, attn_mask=attn_mask)
-            x += time_emb
-
+            x = x + time_emb 
+            
         x = self.transformer.ln2(x + x_skip)
 
         return self.transformer.head(x)
@@ -333,21 +337,6 @@ class Block(nn.Module):
     def forward(self, x, attn_mask=None):
         x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)
         x = x + self.mlp(self.ln_2(x))
-        return x
-
-
-class CrossBlock(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CrossAttention(config)
-        self.ln_3 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
-
-    def forward(self, x, z, attn_mask=None):
-        x = x + self.attn(self.ln_1(x), self.ln_2(z),  attn_mask=attn_mask)
-        x = x + self.mlp(self.ln_3(x))
         return x
 
 

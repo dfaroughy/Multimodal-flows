@@ -5,13 +5,13 @@ from torch.distributions import Categorical
 from utils.tensorclass import TensorMultiModal
 
 class HybridSolver:
-    def __init__(self, model, vocab_size, method='euler-leap', T=1.0, top_k=None, top_p=None):
-        self.method = method
-        self.vocab_size = vocab_size
+    def __init__(self, model, config):
+        self.method = 'euler-leap'
+        self.vocab_size = config.vocab_size
         self.model = model
-        self.T = T 
-        self.top_k = top_k
-        self.top_p = top_p
+        self.T = config.temperature 
+        self.top_k = config.top_k
+        self.top_p = config.top_p
 
     def fwd_step(self, state, delta_t) -> TensorMultiModal:
         if self.method == "euler-leap":
@@ -22,7 +22,7 @@ class HybridSolver:
             - state.discrete (k) : (B, D, 1) current state tensor
         """
 
-        vt, logits = self.model(state)        
+        vt, logits = self.model(state)      
 
         if self.T != 1.0: 
             logits = self._temperature_scheduler(logits, state.time)
@@ -30,7 +30,6 @@ class HybridSolver:
         probs = F.softmax(logits, dim=-1)
 
         if self.top_k is not None: 
-            print(f"top-k = {self.top_k}")
             probs = self._top_k_filter(probs)
 
         if self.top_p is not None: 
@@ -46,9 +45,12 @@ class HybridSolver:
         diff = torch.arange(self.vocab_size, device=state.time.device).view(1, 1, self.vocab_size) - state.discrete[:, :, None]  
         net_jumps = torch.sum(delta_n * diff, dim=-1).type_as(state.discrete)
 
+        # leap step
         state.discrete = (state.discrete + net_jumps * jump_mask) % self.vocab_size
         state.discrete = state.discrete.unsqueeze(-1)
-        state.continuous += vt * delta_t # euler step
+
+        # euler step
+        state.continuous = state.continuous + vt * delta_t 
 
         # if last_step:
         #     max_rate = torch.max(rates, dim=2)[1]
