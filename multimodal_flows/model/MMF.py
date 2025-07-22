@@ -14,23 +14,24 @@ from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import HybridSolver
-from networks.ParticleTransformers import ParticleFormer
+from networks.registry import MODEL_REGISTRY
 
 
 class MultiModalFlowBridge(L.LightningModule):
-    def __init__(self, config, model):
+    def __init__(self, config):
 
         """ Hybrid Dynamical generative model for continuous and discrete states
             based on continuous-time Markov jump processes and flow matching.
         """                 
         super().__init__()
 
-        self.config = config
         thermostat = ConstantThermostat(config.gamma, config.vocab_size)
-        self.model = model(config)
+
+        self.model = MODEL_REGISTRY[config.model](config)
         self.bridge_continuous = UniformFlow(config.sigma)        
-        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)        
+        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
         self.save_hyperparameters(vars(config))
+        self.config = config
 
     # ...Lightning functions
 
@@ -40,7 +41,7 @@ class MultiModalFlowBridge(L.LightningModule):
     def training_step(self, batch: DataCoupling, batch_idx):
 
         loss_mse, loss_ce = self.loss(batch)
-        loss = loss_mse + self.loss_weight * loss_ce
+        loss = loss_mse + self.config.loss_weight * loss_ce
 
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
@@ -51,7 +52,7 @@ class MultiModalFlowBridge(L.LightningModule):
     def validation_step(self, batch: DataCoupling, batch_idx):
 
         loss_mse, loss_ce = self.loss(batch)
-        loss = loss_mse + self.loss_weight * loss_ce
+        loss = loss_mse + self.config.loss_weight * loss_ce
 
         self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
@@ -67,22 +68,40 @@ class MultiModalFlowBridge(L.LightningModule):
         return sample.detach().cpu()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        scheduler = CosineAnnealingLR(
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
+
+        cosine_epochs = max(self.config.max_epochs - self.config.warmup_epochs, 1)
+        cosine_scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.max_epochs,  # full cycle length
-            eta_min=self.lr_final,  # final LR
-            last_epoch=-1,         
+            T_max=cosine_epochs,
+            eta_min=self.config.lr_final,
+            last_epoch=-1
         )
+
+        # linear warmup over the first `warmup_epochs` 
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.01,
+            end_factor=1.0,
+            total_iters=self.config.warmup_epochs
+        )
+
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[self.config.warmup_epochs]
+        )
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "epoch",   
+                "interval": "epoch",   # step per epoch
                 "frequency": 1,
                 "strict": True,
             },
         }
+
 
     # ...Model functions
 
@@ -90,10 +109,8 @@ class MultiModalFlowBridge(L.LightningModule):
 
         """ Multi-modal flow MSE + CE loss
         """
-
-        # sample time uniformly in [eps, 1-eps], eps << 1
-
-        time = self.time_eps  + (1. - self.time_eps ) * torch.rand(len(batch), device=self.device)  # (B,)
+        eps = self.config.time_eps
+        time = eps  + (1. - eps ) * torch.rand(len(batch), device=self.device)
 
         # sample continuous and discrete states from hybrid bridge
 
@@ -113,7 +130,7 @@ class MultiModalFlowBridge(L.LightningModule):
         loss_mse = loss_mse.sum() / mutlimodal_state.mask.sum()
 
         targets_discrete = batch.target.discrete.to(self.device)        
-        loss_ce =  F.cross_entropy(logits.view(-1, self.vocab_size), targets_discrete.view(-1), ignore_index=0, reduction='none')    # (B*D,)
+        loss_ce =  F.cross_entropy(logits.view(-1, self.config.vocab_size), targets_discrete.view(-1), ignore_index=0, reduction='none')    # (B*D,)
         loss_ce = loss_ce.view(len(batch), -1) * mutlimodal_state.mask.squeeze(-1)    # (B, D)
         loss_ce = loss_ce.sum() / mutlimodal_state.mask.sum()
 
@@ -127,17 +144,13 @@ class MultiModalFlowBridge(L.LightningModule):
         """generate target data from source input using trained dynamics
         returns the final state of the bridge at the end of the time interval
         """
-        
-        solver = HybridSolver(model=self, 
-                              vocab_size=self.vocab_size, 
-                              method='euler-leap', 
-                              T=self.temperature, 
-                              top_k=self.top_k if hasattr(self, 'top_k') else None,
-                              top_p=self.top_p if hasattr(self, 'top_p') else None)
-        
-        time_steps = torch.linspace(self.time_eps, 1.0 - self.time_eps, self.num_timesteps, device=self.device)
+
+        eps = self.config.time_eps
+        steps = self.config.num_timesteps
+        time_steps = torch.linspace(eps, 1.0 - eps, steps, device=self.device)
         delta_t = (time_steps[-1] - time_steps[0]) / (len(time_steps) - 1)
 
+        solver = HybridSolver(model=self, config=self.config)
         state = batch.source.clone()
         
         for i, t in enumerate(time_steps):

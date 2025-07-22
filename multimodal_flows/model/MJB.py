@@ -63,17 +63,34 @@ class MarkovJumpBridge(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
-        scheduler = CosineAnnealingLR(
+
+        cosine_epochs = max(self.config.max_epochs - self.config.warmup_epochs, 1)
+        cosine_scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.config.max_epochs,  # full cycle length
-            eta_min=self.config.lr_final,  # final LR
-            last_epoch=-1,         
+            T_max=cosine_epochs,
+            eta_min=self.config.lr_final,
+            last_epoch=-1
         )
+
+        # linear warmup over the first `warmup_epochs` 
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.01,
+            end_factor=1.0,
+            total_iters=self.config.warmup_epochs
+        )
+
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[self.config.warmup_epochs]
+        )
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "epoch",   
+                "interval": "epoch",   # step per epoch
                 "frequency": 1,
                 "strict": True,
             },
