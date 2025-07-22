@@ -12,7 +12,7 @@ from utils.tensorclass import TensorMultiModal
 from utils.aoj import AspenOpenJets 
 from utils.helpers import load_from_experiment, set_logger
 from utils.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
-                            
+from utils.callbacks import TrainLoggerCallback    
 
 
 def experiment_configs(exp_id_path=None):
@@ -109,6 +109,7 @@ def run_train_experiment(config, lighting_module):
                                            mode="min",
                                            save_last=True,
                                             )
+    monitor_callback = TrainLoggerCallback(config)
 
     logger = set_logger(config)
 
@@ -117,7 +118,7 @@ def run_train_experiment(config, lighting_module):
                         devices='auto',
                         strategy='ddp',
                         num_nodes=config.num_nodes,
-                        callbacks=[callback],
+                        callbacks=[callback, monitor_callback],
                         logger=logger,
                         sync_batchnorm=True,
                         gradient_clip_val=1.0,
