@@ -4,6 +4,22 @@ from torch import nn
 import math
 from torch.nn import functional as F
 
+class MLP(nn.Module):
+    def __init__(self, n_embd, n_inner, dropout=0.0, bias=True):
+        super().__init__()
+
+        self.c_fc    = nn.Linear(n_embd, n_inner, bias=bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(n_inner, n_embd, bias=bias)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False
@@ -18,25 +34,25 @@ class LayerNorm(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, config, scale=1):
+    def __init__(self, n_embd, n_head, dropout=0.0, bias=True, qk_layernorm=True):
         super().__init__()
 
-        assert scale * config.n_embd % config.n_head == 0
+        assert n_embd % n_head == 0
 
-        self.c_attn = nn.Linear(config.n_embd * scale, 3 * config.n_embd * scale, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd * scale, config.n_embd * scale, bias=config.bias)
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd * scale
-        self.dropout = config.dropout
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dropout = dropout
+        self.qk_layernorm = qk_layernorm
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
-        if config.qk_layernorm:
-            self.q_layernorm = LayerNorm(config.n_embd * scale // self.n_head, bias=config.bias)
-            self.k_layernorm = LayerNorm(config.n_embd * scale// self.n_head, bias=config.bias)
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd, bias=bias)
+        self.c_proj = nn.Linear(n_embd, n_embd, bias=bias)
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
 
-        self.qk_layernorm = config.qk_layernorm
+        if qk_layernorm:
+            self.q_layernorm = LayerNorm(n_embd // n_head, bias=bias)
+            self.k_layernorm = LayerNorm(n_embd // n_head, bias=bias)
 
     def forward(self, x, attn_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -53,43 +69,36 @@ class SelfAttention(nn.Module):
 
         # self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
 
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
-        
+        if self.flash: # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout, is_causal=False)
         else:
             raise NotImplementedError
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         y = self.resid_dropout(self.c_proj(y))
         return y
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, n_embd, n_head, dropout=0.0, bias=True, qk_layernorm=True):
         super().__init__()
 
-        assert config.n_embd % config.n_head == 0
-        self.c_query = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.c_attn = nn.Linear(config.n_embd, 2 * config.n_embd, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
+        assert n_embd % n_head == 0
+
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dropout = dropout
+        self.qk_layernorm = qk_layernorm
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
-        if config.qk_layernorm:
-            self.q_layernorm = LayerNorm(config.n_embd // self.n_head, bias=config.bias)
-            self.k_layernorm = LayerNorm(config.n_embd // self.n_head, bias=config.bias)
+        self.c_query = nn.Linear(n_embd, n_embd, bias=bias)
+        self.c_attn = nn.Linear(n_embd, 2 * n_embd, bias=bias)
+        self.c_proj = nn.Linear(n_embd, n_embd, bias=bias)
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
 
-        self.qk_layernorm = config.qk_layernorm
+        if qk_layernorm:
+            self.q_layernorm = LayerNorm(n_embd // n_head, bias=bias)
+            self.k_layernorm = LayerNorm(n_embd // n_head, bias=bias)
 
     def forward(self, x, z, attn_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -104,18 +113,12 @@ class CrossAttention(nn.Module):
             q = self.q_layernorm(q)
             k = self.k_layernorm(k)
 
-
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0, is_causal=False)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout, is_causal=False)
         else:
             raise NotImplementedError
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         y = self.resid_dropout(self.c_proj(y))
         return y
@@ -157,74 +160,3 @@ def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000
         emb = F.pad(emb, (0, 1), mode='constant')
     assert emb.shape == (timesteps.shape[0], embedding_dim)
     return emb
-
-
-
-def sample_tokens(logits, argmax_greedy=False, temperature=1.0, top_k=0, top_p=1.0, filter_value=-float("Inf"), min_tokens_to_keep=1):
-    """ Sample tokens from logits distribution
-        Args:
-            logits: logits distribution shape (batch size, vocabulary size)
-            argmax_greedy: if True, use argmax to select highest probability token
-            temperature: modulate logits distribution, higher temp. => more likely to sample low prob tokens
-            top_k: keep only top k tokens with highest probability (top-k filtering).
-            top_p: keep the top tokens with cumulative probability >= top_p (nucleus filtering).
-            filter_value: value to set for filtered logits
-            min_tokens_to_keep: minimum number of tokens to keep in the output
-        Returns:
-            sampled tokens shape (batch size, 1)
-    """
-
-    if argmax_greedy:
-
-        tokens = torch.argmax(logits, dim=-1)
-
-    else:
-        if temperature != 1.0:
-            logits = logits / temperature
-
-        logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
-        probs = F.softmax(logits, dim=-1)
-        tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
-
-    if greedy:
-        # Greedy decoding
-        tokens = torch.argmax(logits, dim=-1)
-
-    return tokens
-
-
-def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf"), min_tokens_to_keep=1):
-
-    """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering
-        Args:
-            logits: logits distribution shape (batch size, vocabulary size)
-            if top_k > 0: keep only top k tokens with highest probability (top-k filtering).
-            if top_p < 1.0: keep the top tokens with cumulative probability >= top_p (nucleus filtering).
-                Nucleus filtering is described in Holtzman et al. (http://arxiv.org/abs/1904.09751)
-            Make sure we keep at least min_tokens_to_keep per batch example in the output
-        From: https://gist.github.com/thomwolf/1a5a29f6962089e871b94cbd09daf317
-    """
-
-    if top_k > 0:
-        top_k = min(max(top_k, min_tokens_to_keep), logits.size(-1))  # Safety check
-        # Remove all tokens with a probability less than the last token of the top-k
-        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
-        logits[indices_to_remove] = filter_value
-
-    if top_p < 1.0:
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-
-        # Remove tokens with cumulative probability above the threshold (token with 0 are kept)
-        sorted_indices_to_remove = cumulative_probs > top_p
-        if min_tokens_to_keep > 1:
-            # Keep at least min_tokens_to_keep (set to min_tokens_to_keep-1 because we add the first one below)
-            sorted_indices_to_remove[..., :min_tokens_to_keep] = 0
-        # Shift the indices to the right to keep also the first token above the threshold
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-        sorted_indices_to_remove[..., 0] = 0
-
-        # scatter sorted tensors to original indexing
-        indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-        logits[indices_to_remove] = filter_value
-    return logits
