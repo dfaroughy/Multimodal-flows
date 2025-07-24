@@ -14,7 +14,7 @@ from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import HybridSolver
-from utils.models import MLP
+from utils.models import MLP, transformer_timestep_embedding
 from networks.registry import MODEL_REGISTRY
 
 
