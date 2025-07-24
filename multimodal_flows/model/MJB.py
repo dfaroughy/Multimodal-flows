@@ -196,10 +196,15 @@ class RandomTelegraphBridge:
 
     def sample(self, time: torch.Tensor, batch: DataCoupling) -> torch.Tensor:
 
-        # time: (B,) 
-        k0 = batch.source.discrete                   # (B, D, 1)
-        k1 = batch.target.discrete                   # (B, D, 1)  
+        # time: (B,) input time in [0, 1]
 
+        if batch.source.has_discrete:
+            k0 = batch.source.discrete  # (B, D, 1)
+        else:
+            k0 = torch.randn_like(batch.target.discrete)  # (B, D, 1)
+            k0 *= batch.target.mask.unsqueeze(-1) 
+
+        k1 = batch.target.discrete                        # (B, D, 1)  
         transition_probs = self.transition_probability(time, k0, k1)
         kt = Categorical(transition_probs).sample().to(k1.device) # (B, D)
 

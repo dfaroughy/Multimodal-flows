@@ -158,21 +158,26 @@ class UniformFlow:
     This bridge is a linear interpolation between boundaries states at t=0 and t=1.
     notation:
       - t: time
-      - x0: continuous source state at t=0
-      - x1: continuous target state at t=1
-      - x: continuous state at time t
-      - z: delta function regularizer
+      - x0: (B, D, dim_continuous) continuous source state at t=0
+      - x1: (B, D, dim_continuous) continuous target state at t=1
+      - xt: (B, D, dim_continuous) continuous state at time t
+      - z: (B, D, dim_continuous) delta function regularizer
     """
 
-    def __init__(self, sigma):
+    def __init__(self, sigma, dim_continuous=None):
         self.sigma = sigma
 
     def sample(self, time: torch.Tensor, batch: DataCoupling) -> torch.Tensor:
 
         t = self.reshape_time_dim_like(time, batch) # (B,) -> (B, 1, 1)
-        x0 = batch.source.continuous  # (B, D, vocab_size)
-        x1 = batch.target.continuous  # (B, D, vocab_size)
 
+        if batch.source.has_continuous:
+            x0 = batch.source.continuous  # (B, D, dim_continuous)
+        else:
+            x0 = torch.randn_like(batch.target.continuous)  # (B, D, dim_continuous)
+            x0 *= batch.target.mask  # apply mask
+
+        x1 = batch.target.continuous  # (B, D, vocab_size)
         xt = t * x1 + (1.0 - t) * x0   # time-interpolated state
         z = torch.randn_like(xt)       # noise
         xt += self.sigma * z    # Dirac -> Gauss smear
