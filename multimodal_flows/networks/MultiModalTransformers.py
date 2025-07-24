@@ -32,7 +32,7 @@ class GatedParticleFormer(nn.Module):
             ln_x        = LayerNorm(config.n_embd),
             blocks_y    = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
             ln_y        = LayerNorm(config.n_embd),
-            blocks_xy   = nn.ModuleList([BraidedCrossAttnBlock(config) for _ in range(config.n_layer_fused)]),
+            blocks_xy   = nn.ModuleList([TemporalGatedCrossAttnBlock(config) for _ in range(config.n_layer_fused)]),
             ln_x_last   = LayerNorm(config.n_embd),
             ln_y_last   = LayerNorm(config.n_embd),
             head_x = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
@@ -47,8 +47,9 @@ class GatedParticleFormer(nn.Module):
 
     def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
         """
-            state.continuous is the corrupted state (B, D, 1) or (B, D, vocab_size) if onehot is True
-            state.time is the time in the corruption process (B,)
+            state.continuous: (B, D, dim_continuous) -- corrupted state 
+            state.discrete: (B, D, 1) or (B, D, vocab_size) -- corrupted tokens
+            state.time: (B,) -- time in corruption process
         """
         
         attn_mask = state.mask.clone()
@@ -87,7 +88,7 @@ class GatedParticleFormer(nn.Module):
         # braided blocks
 
         for block in self.transformer.blocks_xy:
-            x, y = block(x, y, attn_mask=attn_mask)
+            x, y = block(x, y, time_emb, attn_mask=attn_mask)
             x = x + time_emb
             y = y + time_emb
         
@@ -246,6 +247,69 @@ class BraidedCrossAttnBlock(nn.Module):
         y_gate = y_gate + self.cross_ffw_y(y_gate) * self.ffw_gate_y.tanh()
 
         return x_gate, y_gate
+
+
+
+class TemporalGatedCrossAttnBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        if config.n_inner is None:
+            n_inner = 4 * config.n_embd
+        else:
+            n_inner = config.n_inner
+
+        # 1st mode
+        self.ln1_x = LayerNorm(config.n_embd, bias=config.bias)
+        self.self_attn_x = SelfAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
+        self.ln2_x = LayerNorm(config.n_embd, bias=config.bias)
+        self.self_ffw_x = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+
+        # 2nd mode
+        self.ln1_y = LayerNorm(config.n_embd, bias=config.bias)
+        self.self_attn_y = SelfAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
+        self.ln2_y = LayerNorm(config.n_embd, bias=config.bias)
+        self.self_ffw_y = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+
+        # 4 time gates
+        self.time_gate = nn.Sequential(nn.Linear(config.n_embd, config.n_embd // 2),
+                                       nn.GELU(),
+                                       nn.Linear(config.n_embd // 2, 4)
+                                       )
+        nn.init.constant_(self.time_gate[-1].bias, -3.0) # initialized strongly negative so gates start near zero
+
+        # cross-mode
+        self.cross_attn_x = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
+        self.cross_ffw_x = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+        self.cross_attn_y = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm) 
+        self.cross_ffw_y = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+
+
+    def forward(self, x, y, t, attn_mask=None):
+
+        # time gates
+        t = t.squeeze(1)          # (B, n_embd)
+        g_attn_x, g_attn_y, g_ffw_x, g_ffw_y = torch.sigmoid(self.time_gate(t)).unbind(-1)
+        g_attn_x = g_attn_x[:, None, None]   # (B,1,1)
+        g_attn_y = g_attn_y[:, None, None]   # (B,1,1)
+        g_ffw_x  = g_ffw_x[:, None, None]    # (B,1,1)
+        g_ffw_y  = g_ffw_y[:, None, None]    # (B,1,1)
+
+        # self-modal attention
+        x = x + self.self_attn_x(self.ln1_x(x), attn_mask=attn_mask) 
+        x = x + self.self_ffw_x(self.ln2_x(x)) 
+
+        y = y + self.self_attn_y(self.ln1_y(y), attn_mask=attn_mask) 
+        y = y + self.self_ffw_y(self.ln2_y(y)) 
+
+        # Gatted cross-modal attention
+        x_out = x + g_attn_x * self.cross_attn_x(x, y, attn_mask=attn_mask)
+        x_out = x_out + g_ffw_x * self.cross_ffw_x(x_out) 
+
+        y_out = y + g_attn_y * self.cross_attn_y(y, x, attn_mask=attn_mask) 
+        y_out = y_out + g_ffw_y * self.cross_ffw_y(y_out) 
+
+        return x_out, y_out
 
 
 class SelfAttnBlock(nn.Module):

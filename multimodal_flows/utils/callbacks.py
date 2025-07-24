@@ -130,17 +130,17 @@ class TrainLoggerCallback(Callback):
         # first log the standard epoch‐averaged metrics
         self._log_epoch_metrics("train", pl_module)
 
-        # now compute & log the average gates across all layers
-        gxs, gys = [], []
-        for block in pl_module.model.transformer.blocks_xy:
-            gxs.append(torch.tanh(block.attn_gate_x))
-            gys.append(torch.tanh(block.attn_gate_y))
-        avg_gx = torch.stack(gxs).mean()
-        avg_gy = torch.stack(gys).mean()
+        # # now compute & log the average gates across all layers
+        # gxs, gys = [], []
+        # for block in pl_module.model.transformer.blocks_xy:
+        #     gxs.append(torch.tanh(block.attn_gate_x))
+        #     gys.append(torch.tanh(block.attn_gate_y))
+        # avg_gx = torch.stack(gxs).mean()
+        # avg_gy = torch.stack(gys).mean()
 
-        # log them—will show in prog bar and any logger (TB, WandB, etc.)
-        pl_module.log("avg_gate_x", avg_gx, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        pl_module.log("avg_gate_y", avg_gy, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # # log them—will show in prog bar and any logger (TB, WandB, etc.)
+        # pl_module.log("avg_gate_x", avg_gx, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # pl_module.log("avg_gate_y", avg_gy, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
     def on_validation_epoch_end(self, trainer, pl_module):
         self._log_epoch_metrics("val", pl_module)
