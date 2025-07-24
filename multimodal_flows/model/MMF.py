@@ -43,36 +43,19 @@ class MultiModalFlowBridge(L.LightningModule):
     def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
         return self.model(state)
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch: DataCoupling, batch_idx):
         loss, loss_mse, loss_ce = self.loss(batch)
-        self.log("train_loss", loss, on_epoch=True, prog_bar=True)
-        self.log("train_mse",  loss_mse,  on_epoch=True)
-        self.log("train_ce",   loss_ce,   on_epoch=True)
-        return {"loss": loss, "loss_mse": loss_mse, "loss_ce": loss_ce}
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        return {"loss": loss}
 
-    def val_step(self, batch, batch_idx):
+    def validation_step(self, batch: DataCoupling, batch_idx):
         loss, loss_mse, loss_ce = self.loss(batch)
-        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
-        self.log("val_mse",  loss_mse,  on_epoch=True)
-        self.log("val_ce",   loss_ce,   on_epoch=True)
-        return {"loss": loss, "loss_mse": loss_mse, "loss_ce": loss_ce}
-
-    # def training_step(self, batch: DataCoupling, batch_idx):
-    #     loss_mse, loss_ce = self.loss(batch)
-    #     loss = loss_mse + self.config.loss_weight * loss_ce
-    #     self.log("train_loss", loss, on_epoch=True, prog_bar=True)
-    #     self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     return {"loss": loss}
-
-    # def validation_step(self, batch: DataCoupling, batch_idx):
-    #     loss_mse, loss_ce = self.loss(batch)
-    #     loss = loss_mse + self.config.loss_weight * loss_ce
-    #     self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-    #     return {"val_loss": loss}
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+        return {"val_loss": loss}
 
     def predict_step(self, batch: DataCoupling, batch_idx, dataloader_idx=0) -> TensorMultiModal:
         ''' sample generation
@@ -128,47 +111,41 @@ class MultiModalFlowBridge(L.LightningModule):
         ce_mean:    the (unweighted) CE averaged over the batch
         """
         B = len(batch)
+        V = self.config.vocab_size
         eps = self.config.time_eps
         time = eps + (1.0 - eps) * torch.rand(B, device=self.device)
 
         # sample intermediate states
         xt = self.bridge_continuous.sample(time, batch)   # (B,D,dim_cont)
         kt = self.bridge_discrete.sample(time, batch)     # (B,D,1)
-        state = TensorMultiModal(continuous=xt, discrete=kt,
-                                mask=batch.target.mask, time=time).to(self.device)
+        state = TensorMultiModal(continuous=xt, discrete=kt, mask=batch.target.mask, time=time).to(self.device)
 
         vt, logits = self.model(state)   # (B,D,dim_cont), (B,D,V)
 
         # compute per‐sample MSE
-        mse_per = F.mse_loss(vt, 
-                            self.bridge_continuous.conditional_drift(state, batch),
-                            reduction="none")              # (B,D,dim_cont)
-        mse_per = (mse_per * state.mask).sum(dim=[1,2])    # (B,)
-        denom = state.mask.sum(dim=[1,2])                  # (B,)
-        mse_per = mse_per / denom.clamp_min(1.0)           # (B,)
+        targets_continuous = self.bridge_continuous.conditional_drift(state, batch)  # (B,D,dim_cont)
+        mse = F.mse_loss(vt, targets_continuous, reduction="none")  # (B,D,dim_cont)
+        mse = (mse * state.mask).sum(dim=[1,2])                     # (B,)
+        mse = mse / state.mask.sum(dim=[1,2]).clamp_min(1.0)        # (B,)
 
         # compute per‐sample CE
-        V = self.config.vocab_size
-        ce_per = F.cross_entropy(
-            logits.view(B*state.mask.size(1), V),
-            batch.target.discrete.view(-1).to(self.device),
-            ignore_index=0, reduction="none"
-        )                                                   # (B*D,)
-        ce_per = ce_per.view(B, -1) * state.mask.squeeze(-1)  # (B,D)
-        ce_per = ce_per.sum(dim=1) / state.mask.squeeze(-1).sum(dim=1).clamp_min(1.0)
+        targets_discrete = batch.target.discrete.view(-1).to(self.device) 
+        ce = F.cross_entropy(logits.view(-1, V), targets_discrete, ignore_index=0, reduction="none") # (B*D,)
+        ce = ce.view(B, -1) * state.mask.squeeze(-1)  # (B,D)
+        ce = ce.sum(dim=1) / state.mask.squeeze(-1).sum(dim=1).clamp_min(1.0)
 
         # predict uncereteinty weights for multi-task losses
         t_emb = transformer_timestep_embedding(time, self.config.n_embd)  # (B, n_embd)
         u_x, u_y = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
 
         # loss
-        weighted_mse = torch.exp(-u_x) * mse_per + u_x
-        weighted_ce  = torch.exp(-u_y) * ce_per  + u_y
+        weighted_mse = torch.exp(-u_x) * mse + u_x
+        weighted_ce  = torch.exp(-u_y) * ce  + u_y
         total_per    = weighted_mse + weighted_ce       # (B,)
 
         total_loss = total_per.mean()
-        mse_mean   = mse_per.mean()
-        ce_mean    = ce_per.mean()
+        mse_mean   = mse.mean()
+        ce_mean    = ce.mean()
 
         return total_loss, mse_mean, ce_mean
 
