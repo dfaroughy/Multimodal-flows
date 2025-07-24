@@ -132,9 +132,9 @@ class TrainLoggerCallback(Callback):
 
         # now compute & log the average gates across all layers
         gxs, gys = [], []
-        for block in pl_module.model.transformer.attn_blocks:
-            gxs.append(torch.sigmoid(block.gate_x))
-            gys.append(torch.sigmoid(block.gate_y))
+        for block in pl_module.model.transformer.blocks_xy:
+            gxs.append(torch.tanh(block.attn_gate_x))
+            gys.append(torch.tanh(block.attn_gate_y))
         avg_gx = torch.stack(gxs).mean()
         avg_gy = torch.stack(gys).mean()
 

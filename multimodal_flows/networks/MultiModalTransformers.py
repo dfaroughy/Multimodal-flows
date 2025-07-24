@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from dataclasses import dataclass
 
 from utils.tensorclass import TensorMultiModal
-from utils.models import LayerNorm, SelfAttention, CrossAttention, transformer_timestep_embedding
+from utils.models import LayerNorm, SelfAttention, CrossAttention, transformer_timestep_embedding, MLP
 
 
 class GatedParticleFormer(nn.Module):
@@ -224,7 +224,7 @@ class BraidedCrossAttnBlock(nn.Module):
         self.ffw_gate_x = nn.Parameter(torch.tensor([0.0]))
 
         self.cross_attn_y = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm) 
-        self.ffw_gate_y = nn.Parameter(torch.tensor([0.0]))
+        self.attn_gate_y = nn.Parameter(torch.tensor([0.0]))
         self.cross_ffw_y = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
         self.ffw_gate_y = nn.Parameter(torch.tensor([0.0]))
 
@@ -261,7 +261,7 @@ class SelfAttnBlock(nn.Module):
             n_inner = config.n_inner
 
         self.ln1 = LayerNorm(n_embd, bias=config.bias)
-        self.attn = SelfAttention(n_embd, n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
+        self.attn = SelfAttention(n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
         self.ln2 = LayerNorm(n_embd, bias=config.bias)
         self.ffw = MLP(n_embd, n_inner, dropout=config.dropout, bias=config.bias)
 
