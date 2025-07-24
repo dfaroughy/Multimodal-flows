@@ -5,8 +5,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 from dataclasses import dataclass
 
-from networks.attention import SelfAttnBlock, TemporalGatedCrossAttnBlock
 from utils.tensorclass import TensorMultiModal
+from networks.attention import SelfAttnBlock, TemporalGatedCrossAttnBlock
 from utils.models import LayerNorm, transformer_timestep_embedding
 
 

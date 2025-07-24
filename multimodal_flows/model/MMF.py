@@ -14,6 +14,7 @@ from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import HybridSolver
+from utils.models import MLP
 from networks.registry import MODEL_REGISTRY
 
 
@@ -33,32 +34,45 @@ class MultiModalFlowBridge(L.LightningModule):
         self.save_hyperparameters(vars(config))
         self.config = config
 
+        # time-dependent loss uncertainty weights
+        self.uncertainty_net = MLP(config.n_embd, config.n_embd // 2, 2)
+        nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0)
+
     # ...Lightning functions
 
     def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
         return self.model(state)
-        
-    def training_step(self, batch: DataCoupling, batch_idx):
 
-        loss_mse, loss_ce = self.loss(batch)
-        loss = loss_mse + self.config.loss_weight * loss_ce
+    def training_step(self, batch, batch_idx):
+        loss, loss_mse, loss_ce = self.loss(batch)
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True)
+        self.log("train_mse",  loss_mse,  on_epoch=True)
+        self.log("train_ce",   loss_ce,   on_epoch=True)
+        return {"loss": loss, "loss_mse": loss_mse, "loss_ce": loss_ce}
 
-        self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-        self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-        self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    def val_step(self, batch, batch_idx):
+        loss, loss_mse, loss_ce = self.loss(batch)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
+        self.log("val_mse",  loss_mse,  on_epoch=True)
+        self.log("val_ce",   loss_ce,   on_epoch=True)
+        return {"loss": loss, "loss_mse": loss_mse, "loss_ce": loss_ce}
 
-        return {"loss": loss}
+    # def training_step(self, batch: DataCoupling, batch_idx):
+    #     loss_mse, loss_ce = self.loss(batch)
+    #     loss = loss_mse + self.config.loss_weight * loss_ce
+    #     self.log("train_loss", loss, on_epoch=True, prog_bar=True)
+    #     self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     return {"loss": loss}
 
-    def validation_step(self, batch: DataCoupling, batch_idx):
-
-        loss_mse, loss_ce = self.loss(batch)
-        loss = loss_mse + self.config.loss_weight * loss_ce
-
-        self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-        self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-        self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-
-        return {"val_loss": loss}
+    # def validation_step(self, batch: DataCoupling, batch_idx):
+    #     loss_mse, loss_ce = self.loss(batch)
+    #     loss = loss_mse + self.config.loss_weight * loss_ce
+    #     self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+    #     return {"val_loss": loss}
 
     def predict_step(self, batch: DataCoupling, batch_idx, dataloader_idx=0) -> TensorMultiModal:
         ''' sample generation
@@ -105,36 +119,89 @@ class MultiModalFlowBridge(L.LightningModule):
 
     # ...Model functions
 
-    def loss(self, batch: DataCoupling) -> TensorMultiModal:
 
-        """ Multi-modal flow MSE + CE loss
+    def loss(self, batch: DataCoupling) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
+        Returns:
+        total_loss: the uncertainty-weighted sum
+        mse_mean:   the (unweighted) MSE averaged over the batch
+        ce_mean:    the (unweighted) CE averaged over the batch
+        """
+        B = len(batch)
         eps = self.config.time_eps
-        time = eps  + (1. - eps ) * torch.rand(len(batch), device=self.device)
+        time = eps + (1.0 - eps) * torch.rand(B, device=self.device)
 
-        # sample continuous and discrete states from hybrid bridge
+        # sample intermediate states
+        xt = self.bridge_continuous.sample(time, batch)   # (B,D,dim_cont)
+        kt = self.bridge_discrete.sample(time, batch)     # (B,D,1)
+        state = TensorMultiModal(continuous=xt, discrete=kt,
+                                mask=batch.target.mask, time=time).to(self.device)
 
-        xt = self.bridge_continuous.sample(time, batch)
-        kt = self.bridge_discrete.sample(time, batch)
+        vt, logits = self.model(state)   # (B,D,dim_cont), (B,D,V)
 
-        mutlimodal_state = TensorMultiModal(continuous=xt, discrete=kt, mask=batch.target.mask, time=time)
-        mutlimodal_state = mutlimodal_state.to(self.device)
+        # compute per‐sample MSE
+        mse_per = F.mse_loss(vt, 
+                            self.bridge_continuous.conditional_drift(state, batch),
+                            reduction="none")              # (B,D,dim_cont)
+        mse_per = (mse_per * state.mask).sum(dim=[1,2])    # (B,)
+        denom = state.mask.sum(dim=[1,2])                  # (B,)
+        mse_per = mse_per / denom.clamp_min(1.0)           # (B,)
 
-        # compute loss
+        # compute per‐sample CE
+        V = self.config.vocab_size
+        ce_per = F.cross_entropy(
+            logits.view(B*state.mask.size(1), V),
+            batch.target.discrete.view(-1).to(self.device),
+            ignore_index=0, reduction="none"
+        )                                                   # (B*D,)
+        ce_per = ce_per.view(B, -1) * state.mask.squeeze(-1)  # (B,D)
+        ce_per = ce_per.sum(dim=1) / state.mask.squeeze(-1).sum(dim=1).clamp_min(1.0)
 
-        vt, logits = self.model(mutlimodal_state)     # (B, D, dim_continuous), # (B, D, vocab_size)
+        # predict uncereteinty weights for multi-task losses
+        t_emb = transformer_timestep_embedding(time, self.config.n_embd)  # (B, n_embd)
+        u_x, u_y = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
 
-        targets_continuous = self.bridge_continuous.conditional_drift(mutlimodal_state, batch)
-        loss_mse =  F.mse_loss(vt, targets_continuous, reduction='none')
-        loss_mse = loss_mse * mutlimodal_state.mask     # (B, D, dim_continuous)
-        loss_mse = loss_mse.sum() / mutlimodal_state.mask.sum()
+        # loss
+        weighted_mse = torch.exp(-u_x) * mse_per + u_x
+        weighted_ce  = torch.exp(-u_y) * ce_per  + u_y
+        total_per    = weighted_mse + weighted_ce       # (B,)
 
-        targets_discrete = batch.target.discrete.to(self.device)        
-        loss_ce =  F.cross_entropy(logits.view(-1, self.config.vocab_size), targets_discrete.view(-1), ignore_index=0, reduction='none')    # (B*D,)
-        loss_ce = loss_ce.view(len(batch), -1) * mutlimodal_state.mask.squeeze(-1)    # (B, D)
-        loss_ce = loss_ce.sum() / mutlimodal_state.mask.sum()
+        total_loss = total_per.mean()
+        mse_mean   = mse_per.mean()
+        ce_mean    = ce_per.mean()
 
-        return loss_mse, loss_ce
+        return total_loss, mse_mean, ce_mean
+
+    # def loss(self, batch: DataCoupling) -> TensorMultiModal:
+
+        # """ Multi-modal flow MSE + CE loss
+        # """
+        # eps = self.config.time_eps
+        # time = eps  + (1. - eps ) * torch.rand(len(batch), device=self.device)
+
+        # # sample continuous and discrete states from hybrid bridge
+
+        # xt = self.bridge_continuous.sample(time, batch)
+        # kt = self.bridge_discrete.sample(time, batch)
+
+        # mutlimodal_state = TensorMultiModal(continuous=xt, discrete=kt, mask=batch.target.mask, time=time)
+        # mutlimodal_state = mutlimodal_state.to(self.device)
+
+        # # compute loss
+
+        # vt, logits = self.model(mutlimodal_state)     # (B, D, dim_continuous), # (B, D, vocab_size)
+
+        # targets_continuous = self.bridge_continuous.conditional_drift(mutlimodal_state, batch)
+        # loss_mse =  F.mse_loss(vt, targets_continuous, reduction='none')
+        # loss_mse = loss_mse * mutlimodal_state.mask     # (B, D, dim_continuous)
+        # loss_mse = loss_mse.sum() / mutlimodal_state.mask.sum()
+
+        # targets_discrete = batch.target.discrete.to(self.device)        
+        # loss_ce =  F.cross_entropy(logits.view(-1, self.config.vocab_size), targets_discrete.view(-1), ignore_index=0, reduction='none')    # (B*D,)
+        # loss_ce = loss_ce.view(len(batch), -1) * mutlimodal_state.mask.squeeze(-1)    # (B, D)
+        # loss_ce = loss_ce.sum() / mutlimodal_state.mask.sum()
+
+        # return loss_mse, loss_ce
 
     @torch.no_grad()
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:

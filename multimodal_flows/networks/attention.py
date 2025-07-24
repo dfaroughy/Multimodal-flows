@@ -103,12 +103,10 @@ class TemporalGatedCrossAttnBlock(nn.Module):
         self.ln2_y = LayerNorm(config.n_embd, bias=config.bias)
         self.self_ffw_y = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
 
-        # 4 time gates
-        self.time_gate = nn.Sequential(nn.Linear(config.n_embd, config.n_embd // 2),
-                                       nn.GELU(),
-                                       nn.Linear(config.n_embd // 2, 4)
-                                       )
-        nn.init.constant_(self.time_gate[-1].bias, -3.0) # initialized strongly negative so gates start near zero
+        # learnable time gates
+
+        self.gate_net = MLP(config.n_embd, config.n_embd // 2, 4)
+        nn.init.constant_(self.gate_net.c_proj.bias, -3.0) # initialized strongly negative so gates start near zero
 
         # cross-mode
         self.cross_attn_x = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
@@ -121,7 +119,7 @@ class TemporalGatedCrossAttnBlock(nn.Module):
 
         # time gates
         t = t.squeeze(1)          # (B, n_embd)
-        g_attn_x, g_attn_y, g_ffw_x, g_ffw_y = torch.sigmoid(self.time_gate(t)).unbind(-1)
+        g_attn_x, g_attn_y, g_ffw_x, g_ffw_y = torch.sigmoid(self.gate_net(t)).unbind(-1)
         g_attn_x = g_attn_x[:, None, None]   # (B,1,1)
         g_attn_y = g_attn_y[:, None, None]   # (B,1,1)
         g_ffw_x  = g_ffw_x[:, None, None]    # (B,1,1)

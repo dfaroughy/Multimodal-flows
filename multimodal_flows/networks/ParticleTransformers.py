@@ -6,7 +6,8 @@ from torch.nn import functional as F
 from dataclasses import dataclass
 
 from utils.tensorclass import TensorMultiModal
-from utils.models import LayerNorm, SelfAttention, CrossAttention, transformer_timestep_embedding
+from utils.models import LayerNorm, transformer_timestep_embedding
+from networks.attention import SelfAttnBlock, TemporalGatedCrossAttnBlock
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
