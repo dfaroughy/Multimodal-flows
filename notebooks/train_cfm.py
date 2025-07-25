@@ -55,7 +55,6 @@ def experiment_configs(exp_id_path=None):
         config.add_argument("--sigma", "-sig", type=float, default=1e-5)
         config.add_argument("--time_eps", "-eps", type=float, default=1e-5)
         config.add_argument("--num_timesteps", "-steps", type=int, default=1000)
-        config.add_argument("--temperature", type=float, default=1.0)
 
         return config.parse_args()
     else:
