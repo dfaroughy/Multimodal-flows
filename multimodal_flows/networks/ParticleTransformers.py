@@ -228,7 +228,7 @@ class KinFormer(nn.Module):
                                  nn.Linear(config.n_embd, config.n_embd, bias=config.bias)),
             'ln1': LayerNorm(config.n_embd, bias=config.bias),
             'drop': nn.Dropout(config.dropout),
-            'blocks': nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            'blocks': nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
             'ln2': LayerNorm(config.n_embd, bias=config.bias),
             'head': nn.Sequential(nn.Linear(config.n_embd, config.n_inner, bias=config.bias),
                                   nn.GELU(),
@@ -324,21 +324,21 @@ class MLP(nn.Module):
         return x
 
 
-class Block(nn.Module):
-    def __init__(self, config, fused=None):
-        super().__init__()
+# class Block(nn.Module):
+#     def __init__(self, config, fused=None):
+#         super().__init__()
 
-        scale = 2 if fused is not None else 1
+#         scale = 2 if fused is not None else 1
 
-        self.ln_1 = LayerNorm(config.n_embd * scale, bias=config.bias)
-        self.attn = SelfAttention(config, scale)
-        self.ln_2 = LayerNorm(config.n_embd * scale, bias=config.bias)
-        self.mlp = MLP(config, scale)
+#         self.ln_1 = LayerNorm(config.n_embd * scale, bias=config.bias)
+#         self.attn = SelfAttention(config, scale)
+#         self.ln_2 = LayerNorm(config.n_embd * scale, bias=config.bias)
+#         self.mlp = MLP(config, scale)
 
-    def forward(self, x, attn_mask=None):
-        x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)
-        x = x + self.mlp(self.ln_2(x))
-        return x
+#     def forward(self, x, attn_mask=None):
+#         x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)
+#         x = x + self.mlp(self.ln_2(x))
+#         return x
 
 
 def lund_observables(state, mu=1.0, sig=1.0):

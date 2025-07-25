@@ -29,27 +29,29 @@ def experiment_configs(exp_id_path=None):
         config.add_argument("--tags", type=str, nargs='*')
 
         config.add_argument("--data_files", "-f", type=str, default='RunG_batch0.h5')
+        config.add_argument("--continuous_features", "-cont", type=str, nargs='*', default=['pt', 'eta_rel', 'phi_rel'])
+        config.add_argument("--discrete_features", "-disc", type=str, default=None)
         config.add_argument("--num_jets", "-n", type=int, default=100_000)
         config.add_argument("--max_num_particles", "-d", type=int, default=150)
         config.add_argument("--dim_continuous", type=int, default=3)
         config.add_argument("--batch_size", "-bs", type=int, default=256)
         config.add_argument("--max_epochs", "-epochs", type=int, default=250)
         config.add_argument("--train_frac", type=float, default=0.8)
-
         config.add_argument("--model", "-nn", type=str, default='KinFormer')
         config.add_argument("--use_pairwise", type=bool, default=False)
         config.add_argument("--use_pos_emb", type=bool, default=False)
         config.add_argument("--n_embd", type=int, default=256)
-        config.add_argument("--n_embd_glob", type=int, default=10)
+        config.add_argument("--n_embd_glob", type=int, default=10)  # EPiC specific
         config.add_argument("--n_inner", type=int, default=1024)
         config.add_argument("--n_layer", type=int, default=2)
         config.add_argument("--n_head", type=int, default=2)
         config.add_argument("--dropout", type=float, default=0.0)
         config.add_argument("--qk_layernorm", type=bool, default=True)
-        config.add_argument("--bias", type=bool, default=False)
+        config.add_argument("--bias", type=bool, default=True)
         config.add_argument("--lr", type=float, default=1e-4)
         config.add_argument("--lr_final", type=float, default=1e-5)
-        
+        config.add_argument("--warmup_epochs", type=int, default=10)
+
         config.add_argument("--sigma", "-sig", type=float, default=1e-5)
         config.add_argument("--time_eps", "-eps", type=float, default=1e-5)
         config.add_argument("--num_timesteps", "-steps", type=int, default=1000)
@@ -68,16 +70,13 @@ def make_dataloaders(config):
     # target
     jets, metadata = aoj(num_jets=config.num_jets,
                         download=False,
-                        features={"continuous": ['pt', 'eta_rel', 'phi_rel'], "discrete": None},
+                        features={"continuous": config.continuous_features, "discrete": config.discrete_features},    
                         transform='standardize',
                         pt_order=True,
                         padding='zeros')
 
     config.metadata = metadata
-
-    # source
-    gauss_noise = torch.randn_like(jets.continuous) * jets.mask
-    noise = TensorMultiModal(continuous=gauss_noise, mask=jets.mask.clone())
+    noise = TensorMultiModal(mask=jets.mask.clone())
 
     # source-target coupling
     data = DataCoupling(source=noise, target=jets)

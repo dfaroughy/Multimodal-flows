@@ -171,12 +171,11 @@ class UniformFlow:
 
         t = self.reshape_time_dim_like(time, batch) # (B,) -> (B, 1, 1)
 
-        if batch.source.has_continuous:
-            x0 = batch.source.continuous  # (B, D, dim_continuous)
-        else:
-            x0 = torch.randn_like(batch.target.continuous)  # (B, D, dim_continuous)
-            x0 *= batch.target.mask  # apply mask
+        if not batch.source.has_continuous:
+            batch.source.continuous = torch.randn_like(batch.target.continuous)  # (B, D, dim_continuous)
+            batch.source.continuous *= batch.target.mask
 
+        x0 = batch.source.continuous  # (B, D, dim_continuous)
         x1 = batch.target.continuous  # (B, D, vocab_size)
         xt = t * x1 + (1.0 - t) * x0   # time-interpolated state
         z = torch.randn_like(xt)       # noise

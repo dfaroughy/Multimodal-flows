@@ -155,10 +155,11 @@ class RandomTelegraphBridge:
     - k: discrete state at time t
     """
 
-    def __init__(self, gamma, vocab_size, thermostat_fn):
+    def __init__(self, gamma, vocab_size, thermostat_fn, top_k=None):
         self.gamma = gamma
         self.vocab_size = vocab_size
         self.thermostat = thermostat_fn
+        self.top_k = top_k
 
     def rate(self, state: TensorMultiModal, probs: torch.Tensor):
         """ input:
@@ -198,14 +199,18 @@ class RandomTelegraphBridge:
 
         # time: (B,) input time in [0, 1]
 
-        if batch.source.has_discrete:
-            k0 = batch.source.discrete  # (B, D, 1)
-        else:
-            k0 = torch.randn_like(batch.target.discrete)  # (B, D, 1)
-            k0 *= batch.target.mask.unsqueeze(-1) 
+        if not batch.source.has_discrete:
+            batch.source.discrete = torch.randint_like(batch.target.discrete, 1, self.vocab_size)  # (B, D, 1)
+            batch.source.discrete *= batch.target.mask
 
-        k1 = batch.target.discrete                        # (B, D, 1)  
+        k0 = batch.source.discrete     # (B, D, 1)
+        k1 = batch.target.discrete     # (B, D, 1)  
+
         transition_probs = self.transition_probability(time, k0, k1)
+
+        if self.top_k is not None: 
+            transition_probs = self._top_k_filter(transition_probs)
+
         kt = Categorical(transition_probs).sample().to(k1.device) # (B, D)
 
         return kt.unsqueeze(-1) # (B, D, 1)
@@ -251,6 +256,13 @@ class RandomTelegraphBridge:
         kronecker = (k_out == k_in).float()
         prob = 1.0 / self.vocab_size + wt[:, None, None] * ((-1.0 / self.vocab_size) + kronecker)
         return prob
+
+    def _top_k_filter(self, probs):
+        _, idx = torch.topk(probs, self.top_k, dim=-1)
+        mask = torch.zeros_like(probs, device=probs.device).scatter_(-1, idx, 1.0)
+        probs = probs * mask.to(probs.dtype)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+        return probs
 
 
 right_shape = lambda x: x if len(x.shape) == 3 else x[:, :, None]

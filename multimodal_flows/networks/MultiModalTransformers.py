@@ -31,7 +31,7 @@ class GatedParticleFormer(nn.Module):
             drop        = nn.Dropout(config.dropout),
             blocks_x    = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
             ln_x        = LayerNorm(config.n_embd),
-            blocks_y    = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
+            blocks_y    = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer // 2)]),  # half of the layers for discrete tokens
             ln_y        = LayerNorm(config.n_embd),
             blocks_xy   = nn.ModuleList([TemporalGatedCrossAttnBlock(config) for _ in range(config.n_layer_fused)]),
             ln_x_last   = LayerNorm(config.n_embd),
@@ -138,11 +138,11 @@ class FusedParticleFormer(nn.Module):
             ln_x_last  = LayerNorm(config.n_embd),
             ln_y_last  = LayerNorm(config.n_embd),
             head_x = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
-                                     nn.GELU(),
-                                     nn.Linear(config.n_inner, config.dim_continuous)),
+                                   nn.GELU(),
+                                   nn.Linear(config.n_inner, config.dim_continuous)),
             head_y = nn.Sequential(nn.Linear(config.n_embd, config.n_inner), 
-                                      nn.GELU(),
-                                      nn.Linear(config.n_inner, config.vocab_size)) # classifier head for discrete tokens
+                                   nn.GELU(),
+                                   nn.Linear(config.n_inner, config.vocab_size)) # classifier head for discrete tokens
         ))
 
         self.apply(self._init_weights)
