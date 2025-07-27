@@ -31,13 +31,15 @@ class MultiModalFlowBridge(L.LightningModule):
         self.model = MODEL_REGISTRY[config.model](config)
         self.bridge_continuous = UniformFlow(config.sigma)        
         self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
+        self.loss_combine = MultiTaskLoss(config)
+
         self.save_hyperparameters(vars(config))
         self.config = config
 
         # time-dependent loss uncertainty weights
-        if config.weighted_loss:
-            self.uncertainty_net = MLP(config.n_embd, config.n_embd, n_out=2) 
-            nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0) # start balanced L = Lmse + Lce
+        # if config.weighted_loss:
+        #     self.uncertainty_net = MLP(config.n_embd, config.n_embd, n_out=2) 
+        #     nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0) # start balanced L = Lmse + Lce
 
     # ...Lightning functions
 
@@ -140,19 +142,21 @@ class MultiModalFlowBridge(L.LightningModule):
         ce = F.cross_entropy(logits.view(-1, V), targets_discrete, ignore_index=0, reduction="none") # (B*D,)
         ce = ce.view(B, -1) * state.mask.squeeze(-1)                           # (B,D)
         loss_ce = ce.sum(dim=1) / state.mask.squeeze(-1).sum(dim=1).clamp_min(1.0)  # (B,)
+        loss = self.loss_combine(loss_mse, loss_ce, state)
+        return loss
 
-        if self.config.weighted_loss:
-            # predict time-dependent uncertainty weights for multi-task loss
-            t_emb = transformer_timestep_embedding(time, self.config.n_embd)  # (B, n_embd)
-            u_mse, u_ce = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
-            w_mse = torch.exp(-u_mse)
-            w_ce = torch.exp(-u_ce)
-            loss  = 0.5 * (w_mse * loss_mse + u_mse) + 0.5 * (w_ce * loss_ce + u_ce)       # (B,)
-            return loss.mean(), loss_mse.mean(), loss_ce.mean(), w_mse.mean(), w_ce.mean() 
-        else:
-            # unweighted loss:
-            loss = loss_mse + loss_ce
-            return loss.mean(), loss_mse.mean(), loss_ce.mean(), None, None
+        # if self.config.weighted_loss:
+        #     # predict time-dependent uncertainty weights for multi-task loss
+        #     t_emb = transformer_timestep_embedding(time, self.config.n_embd)  # (B, n_embd)
+        #     u_mse, u_ce = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
+        #     w_mse = torch.exp(-u_mse)
+        #     w_ce = torch.exp(-u_ce)
+        #     loss  = 0.5 * (w_mse * loss_mse + u_mse) + 0.5 * (w_ce * loss_ce + u_ce)       # (B,)
+        #     return loss.mean(), loss_mse.mean(), loss_ce.mean(), w_mse.mean(), w_ce.mean() 
+        # else:
+        #     # unweighted loss:
+        #     loss = loss_mse + loss_ce
+        #     return loss.mean(), loss_mse.mean(), loss_ce.mean(), None, None
 
 
     @torch.no_grad()
@@ -181,3 +185,32 @@ class MultiModalFlowBridge(L.LightningModule):
         return batch
 
 
+
+class MultiTaskLoss(nn.Module):
+    def __init__(self, config):
+
+        if self.config.loss_combine == "time-weighted":
+            self.uncertainty_net = MLP(config.n_embd, config.n_embd, n_out=2) 
+            nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0) # start balanced L = Lmse + Lce
+            
+        elif self.config.loss_combine == "weighted":
+            self.loss_weights = nn.Parameter(torch.tensor([0.0, 0.0]))
+
+    def forward(self, loss_1, loss_2, state=None):
+
+        if self.config.loss_combine == "weighted":
+            u1, u2 = self.loss_weights 
+            w1, w2 = torch.exp(-u1), torch.exp(-u2)
+            loss = 0.5 * (w1 * loss_1 + w2 * loss_2)
+            return loss.mean(), loss_1.mean(), loss_2.mean(), w1, w2
+
+        if self.config.loss_combine == "time-weighted":
+            t_emb = transformer_timestep_embedding(state.time, self.config.n_embd)  # (B, n_embd)
+            u1, u2 = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
+            w1, w2 = torch.exp(-u1), torch.exp(-u2)
+            loss = 0.5 * (w1 * loss_1 + w2 * loss_2)
+            return loss.mean(), loss_1.mean(), loss_2.mean(), w_mse.mean(), w_ce.mean() 
+
+        else:
+            loss = loss_1 + loss_2
+            return loss.mean(), loss_1.mean(), loss_2.mean(), None, None 
