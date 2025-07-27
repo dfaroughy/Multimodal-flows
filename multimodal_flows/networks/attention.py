@@ -33,6 +33,50 @@ class SelfAttnBlock(nn.Module):
 
 
 
+class TemporalConvexCrossAttnBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if config.n_inner is None:
+            n_inner = 4 * config.n_embd
+        else:
+            n_inner = config.n_inner
+
+        # single scalar gate
+        self.gate_net = MLP(config.n_embd, config.n_embd // 2, n_out=1, dropout=config.dropout)
+        nn.init.constant_(self.gate_net.c_proj.bias, 0.0)  # start at 0 → sigmoid=0.5
+
+        # norms for convex mix
+        self.ln1 = LayerNorm(config.n_embd, bias=config.bias)   # for x
+        self.ln2 = LayerNorm(config.n_embd, bias=config.bias)   # for y
+
+        self.cross_attn = CrossAttention(
+            config.n_embd, config.n_head,
+            dropout=config.dropout, bias=config.bias,
+            qk_layernorm=config.qk_layernorm
+        )
+        self.ln3 = LayerNorm(config.n_embd, bias=config.bias)   # before FFN
+        self.ffw = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+
+    def forward(self, x, y, t, attn_mask=None):
+        B, D, C = x.shape
+
+        t_flat = t.squeeze(1)                             # (B,)
+        gate   = torch.sigmoid(self.gate_net(t_flat))     # (B,1)
+        gate   = gate.squeeze(-1)                         # (B,)
+        gate   = gate.view(B, 1, 1)                       # (B,1,1)
+
+        x_norm = self.ln1(x)                              # (B,D,C)
+        y_norm = self.ln2(y)                              # (B,D,C)
+        mix     = (1 - gate) * x_norm + gate * y_norm      # (B,D,C)
+
+        x_attn = self.cross_attn(x_norm, mix, attn_mask=attn_mask)  # (B,D,C)
+        x  = x + x_attn
+        x  = x + self.ffw(self.ln3(x))       
+
+        return x
+
+
+
 class TemporalGatedCrossAttnBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -60,8 +104,13 @@ class TemporalGatedCrossAttnBlock(nn.Module):
         nn.init.constant_(self.gate_net.c_proj.bias, -3.0) # initialized strongly negative so gates start near zero
 
         # cross-mode
+        self.ln3_x = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln4_x = LayerNorm(config.n_embd, bias=config.bias)
         self.cross_attn_x = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm)
         self.cross_ffw_x = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
+
+        self.ln3_y = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln4_y = LayerNorm(config.n_embd, bias=config.bias)
         self.cross_attn_y = CrossAttention(config.n_embd, config.n_head, dropout=config.dropout, bias=config.bias, qk_layernorm=config.qk_layernorm) 
         self.cross_ffw_y = MLP(config.n_embd, n_inner, dropout=config.dropout, bias=config.bias)
 
@@ -84,11 +133,12 @@ class TemporalGatedCrossAttnBlock(nn.Module):
         y = y + self.self_ffw_y(self.ln2_y(y)) 
 
         # Gatted cross-modal attention
-        x_out = x + g_attn_x * self.cross_attn_x(x, y, attn_mask=attn_mask)
-        x_out = x_out + g_ffw_x * self.cross_ffw_x(x_out) 
+        x_out = x + g_attn_x * self.cross_attn_x(self.ln3_x(x), self.ln3_y(y), attn_mask=attn_mask)
+        x_out = x_out + g_ffw_x * self.cross_ffw_x(self.ln3_x(x_out)) 
 
-        y_out = y + g_attn_y * self.cross_attn_y(y, x, attn_mask=attn_mask) 
-        y_out = y_out + g_ffw_y * self.cross_ffw_y(y_out) 
+        y_out = y + g_attn_y * self.cross_attn_y(self.ln4_y(y), self.ln4_x(x), attn_mask=attn_mask) 
+        y_out = y_out + g_ffw_y * self.cross_ffw_y(self.ln4_x(x_out)) 
+
 
         return x_out, y_out
 
