@@ -233,3 +233,91 @@ def plot_kin_feats(sample, test, path=None):
 
     if path: plt.savefig(path, dpi=500, bbox_inches='tight')
     else: plt.show()
+
+
+
+def flavor_kinematics(sample, test, path=None):
+
+    fig, ax = plt.subplots(8, 3, figsize=(10, 14))
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_Photon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_Photon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_Photon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_Photon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(test.constituents.phi_Photon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,2], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.phi_Photon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,2], log_scale=(False, True), lw=0.75)
+
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_NeutralHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_NeutralHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_NeutralHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_NeutralHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(test.constituents.phi_NeutralHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.phi_NeutralHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[1,2], log_scale=(False, True), lw=0.75)
+
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_NegativeHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_NegativeHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_NegativeHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_NegativeHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(test.constituents.eta_NegativeHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,2], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_NegativeHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[2,2], log_scale=(False, True), lw=0.75)
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_PositiveHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_PositiveHadron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_PositiveHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.eta_PositiveHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,1], log_scale=(False, True), lw=0.75)
+    sns.histplot(test.constituents.phi_PositiveHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,2], log_scale=(False, True), lw=0.75)
+    sns.histplot(sample.constituents.phi_PositiveHadron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[3,2], log_scale=(False, True), lw=0.75) 
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_Electron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_Electron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_Electron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.eta_Electron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(test.constituents.phi_Electron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,2], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.phi_Electron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[4,2], log_scale=(False, False), lw=0.75)
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_Positron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_Positron.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_Positron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.eta_Positron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(test.constituents.phi_Positron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,2], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.phi_Positron.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[5,2], log_scale=(False, False), lw=0.75)
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_Muon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_Muon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_Muon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.eta_Muon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(test.constituents.phi_Muon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,2], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.phi_Muon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[6,2], log_scale=(False, False), lw=0.75)
+
+    bins = np.linspace(0, 500, 100)
+    sns.histplot(test.constituents.pt_AntiMuon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,0], log_scale=(False, True), lw=0.75, label="AOJ (truth)")
+    sns.histplot(sample.constituents.pt_AntiMuon.numpy(), bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,0], log_scale=(False, True), lw=0.75, label="MMF - ParticleFormer")
+    bins = np.linspace(-1.1, 1.1, 100)
+    sns.histplot(test.constituents.eta_AntiMuon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.eta_AntiMuon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,1], log_scale=(False, False), lw=0.75)
+    sns.histplot(test.constituents.phi_AntiMuon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,2], log_scale=(False, False), lw=0.75)
+    sns.histplot(sample.constituents.phi_AntiMuon.numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[7,2], log_scale=(False, False), lw=0.75)
+
+    plt.tight_layout()
+
+    for a in ax.flatten():
+        a.legend([], [], frameon=False)
+
+    if path: plt.savefig(path, dpi=500, bbox_inches='tight')
+    else: plt.show()

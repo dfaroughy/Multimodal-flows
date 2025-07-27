@@ -6,7 +6,8 @@ import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.callbacks import Callback, RichProgressBar
+from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.utilities import rank_zero_only
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
@@ -162,3 +163,34 @@ class TrainLoggerCallback(Callback):
                 sync_dist=True,
             )
         self.epoch_metrics[stage].clear()
+
+
+class ProgressBarCallback(Callback):
+    """
+    Callback to customize the progress bar theme.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.theme = RichProgressBarTheme(description="green_yellow",
+                                        progress_bar="green1",
+                                        progress_bar_finished="green1",
+                                        progress_bar_pulse="#6206E0",
+                                        batch_progress="green_yellow",
+                                        time="grey82",
+                                        processing_speed="grey82",
+                                        metrics="grey82",
+                                        metrics_text_delimiter="\n",
+                                        metrics_format=".3e")
+
+    def on_train_start(self, trainer, pl_module):
+        trainer.progress_bar = RichProgressBar(theme=self.theme)
+
+    def on_validation_start(self, trainer, pl_module):
+        trainer.progress_bar = RichProgressBar(theme=self.theme)
+    
+    def on_predict_start(self, trainer, pl_module):
+        trainer.progress_bar = RichProgressBar(theme=self.theme)
+
+

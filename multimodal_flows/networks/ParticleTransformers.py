@@ -18,6 +18,83 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
+class KinFlavorFormer(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+
+        self.n_embd = config.n_embd
+        self.n_head = config.n_head
+        self.max_num_particles = config.max_num_particles
+        self.mu = torch.tensor(config.metadata['mean'])
+        self.sig = torch.tensor(config.metadata['std'])
+
+        self.transformer = nn.ModuleDict(dict(
+            wxe = nn.Sequential(nn.Linear(config.dim_continuous, config.n_embd), 
+                                 nn.GELU(),
+                                 nn.Linear(config.n_embd, config.n_embd // 2)),
+            wye = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd), 
+                                nn.GELU(),
+                                nn.Linear(config.n_embd, config.n_embd // 2)),                    
+            ln1_x = LayerNorm(config.n_embd // 2),
+            ln1_y = LayerNorm(config.n_embd // 2),
+            drop = nn.Dropout(config.dropout),
+            blocks = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
+            ln2= LayerNorm(config.n_embd),
+            head_x = nn.Sequential(nn.Linear(config.n_embd//2, config.n_inner),
+                                    nn.GELU(),
+                                    nn.Linear(config.n_inner, config.dim_continuous)),
+            head_y = nn.Sequential(nn.Linear(config.n_embd//2, config.n_inner),
+                                    nn.GELU(),
+                                    nn.Linear(config.n_inner, config.vocab_size)),
+        ))
+
+        self.apply(self._init_weights)
+
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
+
+        attn_mask = state.mask.clone()
+        attn_mask = state.mask.bool().squeeze()                   # (B, D) 
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
+        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
+
+        # Initial embeddings
+
+        x_emb = self.transformer.wxe(state.continuous)                      # continuous (B, D, n_embd/2)
+        x_emb = self.transformer.ln1_x(x_emb)                            # layer norm (B, D, n_embd/2)
+
+        y_emb = self.transformer.wye(state.discrete.squeeze(-1))            # discrete (B, D, n_embd/2)
+        y_emb = self.transformer.ln1_y(y_emb)                            # layer norm (B, D, n_embd/2)
+
+        z_emb = torch.cat((x_emb, y_emb), dim=-1)                           # joint emb (B, D, n_embd)
+
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
+        time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
+
+        # transformer blocks
+
+        z = self.transformer.drop(z_emb + time_emb)
+        z_skip = z.clone()  # skip connection for final layer norm  
+
+        for block in self.transformer.blocks:
+            z = block(z, attn_mask=attn_mask)
+            z = z + time_emb 
+            
+        z = self.transformer.ln2(z + z_skip) 
+        x, y = z.split((self.n_embd // 2, self.n_embd // 2), dim=-1)  
+
+        return self.transformer.head_x(x), self.transformer.head_y(y)  
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)    
+
 
 class ParticleFormer(nn.Module):
 
@@ -306,39 +383,6 @@ class KinFormer(nn.Module):
 
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)    
-
-
-class MLP(nn.Module):
-    def __init__(self, config, scale):
-        super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd * scale, config.n_inner, bias=config.bias)
-        self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(config.n_inner , config.n_embd  * scale, bias=config.bias)
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
-
-
-# class Block(nn.Module):
-#     def __init__(self, config, fused=None):
-#         super().__init__()
-
-#         scale = 2 if fused is not None else 1
-
-#         self.ln_1 = LayerNorm(config.n_embd * scale, bias=config.bias)
-#         self.attn = SelfAttention(config, scale)
-#         self.ln_2 = LayerNorm(config.n_embd * scale, bias=config.bias)
-#         self.mlp = MLP(config, scale)
-
-#     def forward(self, x, attn_mask=None):
-#         x = x + self.attn(self.ln_1(x), attn_mask=attn_mask)
-#         x = x + self.mlp(self.ln_2(x))
-#         return x
 
 
 def lund_observables(state, mu=1.0, sig=1.0):
