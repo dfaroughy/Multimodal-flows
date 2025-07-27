@@ -36,11 +36,6 @@ class MultiModalFlowBridge(L.LightningModule):
         self.save_hyperparameters(vars(config))
         self.config = config
 
-        # time-dependent loss uncertainty weights
-        # if config.weighted_loss:
-        #     self.uncertainty_net = MLP(config.n_embd, config.n_embd, n_out=2) 
-        #     nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0) # start balanced L = Lmse + Lce
-
     # ...Lightning functions
 
     def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
@@ -51,7 +46,7 @@ class MultiModalFlowBridge(L.LightningModule):
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
-        if self.config.weighted_loss:
+        if 'weighted' in self.config.multitask_loss:
             self.log("train_weight_mse", w_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
             self.log("train_weight_ce", w_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
         return {"loss": loss}
@@ -61,7 +56,7 @@ class MultiModalFlowBridge(L.LightningModule):
         self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
-        if self.config.weighted_loss:
+        if 'weighted' in self.config.multitask_loss:
             self.log("val_weight_mse", w_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
             self.log("val_weight_ce", w_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
         return {"val_loss": loss}
@@ -111,7 +106,6 @@ class MultiModalFlowBridge(L.LightningModule):
 
     # ...Model functions
 
-
     def loss(self, batch: DataCoupling) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
@@ -147,19 +141,6 @@ class MultiModalFlowBridge(L.LightningModule):
         loss = self.loss_combine(loss_mse, loss_ce, state)
         
         return loss
-
-        # if self.config.weighted_loss:
-        #     # predict time-dependent uncertainty weights for multi-task loss
-        #     t_emb = transformer_timestep_embedding(time, self.config.n_embd)  # (B, n_embd)
-        #     u_mse, u_ce = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
-        #     w_mse = torch.exp(-u_mse)
-        #     w_ce = torch.exp(-u_ce)
-        #     loss  = 0.5 * (w_mse * loss_mse + u_mse) + 0.5 * (w_ce * loss_ce + u_ce)       # (B,)
-        #     return loss.mean(), loss_mse.mean(), loss_ce.mean(), w_mse.mean(), w_ce.mean() 
-        # else:
-        #     # unweighted loss:
-        #     loss = loss_mse + loss_ce
-        #     return loss.mean(), loss_mse.mean(), loss_ce.mean(), None, None
 
 
     @torch.no_grad()
