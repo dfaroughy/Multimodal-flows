@@ -142,7 +142,10 @@ class MultiModalFlowBridge(L.LightningModule):
         ce = F.cross_entropy(logits.view(-1, V), targets_discrete, ignore_index=0, reduction="none") # (B*D,)
         ce = ce.view(B, -1) * state.mask.squeeze(-1)                           # (B,D)
         loss_ce = ce.sum(dim=1) / state.mask.squeeze(-1).sum(dim=1).clamp_min(1.0)  # (B,)
+
+        # combine multitask losses
         loss = self.loss_combine(loss_mse, loss_ce, state)
+        
         return loss
 
         # if self.config.weighted_loss:
@@ -189,28 +192,29 @@ class MultiModalFlowBridge(L.LightningModule):
 class MultiTaskLoss(nn.Module):
     def __init__(self, config):
 
-        if self.config.loss_combine == "time-weighted":
+        if self.config.multitask_loss == "weighted":
+            self.loss_weights = nn.Parameter(torch.tensor([0.0, 0.0]))
+            
+        elif self.config.multitask_loss == "time-weighted":
             self.uncertainty_net = MLP(config.n_embd, config.n_embd, n_out=2) 
             nn.init.constant_(self.uncertainty_net.c_proj.bias, 0.0) # start balanced L = Lmse + Lce
-            
-        elif self.config.loss_combine == "weighted":
-            self.loss_weights = nn.Parameter(torch.tensor([0.0, 0.0]))
 
     def forward(self, loss_1, loss_2, state=None):
 
-        if self.config.loss_combine == "weighted":
-            u1, u2 = self.loss_weights 
-            w1, w2 = torch.exp(-u1), torch.exp(-u2)
-            loss = 0.5 * (w1 * loss_1 + w2 * loss_2)
-            return loss.mean(), loss_1.mean(), loss_2.mean(), w1, w2
-
-        if self.config.loss_combine == "time-weighted":
-            t_emb = transformer_timestep_embedding(state.time, self.config.n_embd)  # (B, n_embd)
-            u1, u2 = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
-            w1, w2 = torch.exp(-u1), torch.exp(-u2)
-            loss = 0.5 * (w1 * loss_1 + w2 * loss_2)
-            return loss.mean(), loss_1.mean(), loss_2.mean(), w_mse.mean(), w_ce.mean() 
-
-        else:
+        if  self.config.multitask_loss == "sum":
             loss = loss_1 + loss_2
             return loss.mean(), loss_1.mean(), loss_2.mean(), None, None 
+
+        elif self.config.multitask_loss == "weighted":
+            u1, u2 = self.loss_weights.unbind(-1)  
+
+        elif self.config.multitask_loss == "time-weighted":
+            t_emb = transformer_timestep_embedding(state.time, self.config.n_embd)  # (B, n_embd)
+            u1, u2 = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
+
+        w1, w2 = torch.exp(-u1), torch.exp(-u2)
+        loss = 0.5 * (u1 + w1 * loss_1) + 0.5 * (u2 + w2 * loss_2)
+
+        return loss.mean(), loss_1.mean(), loss_2.mean(), w_mse.mean(), w_ce.mean() 
+
+
