@@ -53,7 +53,6 @@ class FlowGeneratorCallback(Callback):
         sample = TensorMultiModal.cat([TensorMultiModal.load_from(str(f)) for f in temp_files], dim=0)
 
         if sample.has_continuous: # post-process continuous features
-
             mu = torch.tensor(self.config.metadata['mean'])
             sig = torch.tensor(self.config.metadata['std'])
             sample.continuous = (sample.continuous * sig) + mu
@@ -153,41 +152,56 @@ class TrainLoggerCallback(Callback):
         self.epoch_metrics[stage].clear()
 
 
+
 class EMACallback(Callback):
-    def __init__(self, decay=0.9999, swap_on_val: bool = True):
+    def __init__(self, config):
         super().__init__()
-        self.decay = decay
-        self.swap_on_val = swap_on_val
+        self.decay = config.ema_decay
+        self.use_ema_weights = config.use_ema_weights
         self.ema_model = None
         self._backup = None
 
     def setup(self, trainer, pl_module, stage=None):
-        # 1) find the device your model lives on
-        device = next(pl_module.model.parameters()).device  # torch.device('cuda:0'), etc.
-        # 2) build the EMA copy on *that* same device
-        self.ema_model = ModelEmaV2(
-            pl_module.model, 
-            decay=self.decay, 
-            device=str(device)       # e.g. "cuda:0"
-        )
+        device = next(pl_module.model.parameters()).device
+        self.ema_model = ModelEmaV2(pl_module.model,decay=self.decay,device=str(device))
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.ema_model.update(pl_module.model)
 
     def on_validation_start(self, trainer, pl_module):
-        if not self.swap_on_val:
+        # swap EMA for validation 
+        if not self.use_ema_weights:
             return
         self._backup = deepcopy(pl_module.model.state_dict())
         pl_module.model.load_state_dict(self.ema_model.module.state_dict())
 
     def on_validation_end(self, trainer, pl_module):
-        if not self.swap_on_val or self._backup is None:
+        # restore online weights after validation
+        if not self.use_ema_weights or self._backup is None:
             return
         pl_module.model.load_state_dict(self._backup)
         self._backup = None
 
+    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        return {"ema_state_dict": self.ema_model.module.state_dict()}
 
+    def on_load_checkpoint(self, trainer, pl_module, checkpoint):
+        device = next(pl_module.model.parameters()).device
+        self.ema_model = ModelEmaV2(pl_module.model,decay=self.decay,device=str(device))
+        if "ema_state_dict" in checkpoint:
+            self.ema_model.module.load_state_dict(checkpoint["ema_state_dict"])
 
+    def on_predict_start(self, trainer, pl_module):
+        if self.use_ema_weights:
+            self._predict_backup = deepcopy(pl_module.model.state_dict())
+            pl_module.model.load_state_dict(self.ema_model.module.state_dict())
+
+    def on_predict_end(self, trainer, pl_module):
+        if self.use_ema_weights and hasattr(self, '_predict_backup'):
+            pl_module.model.load_state_dict(self._predict_backup)
+            del self._predict_backup
+
+             
 
 class ProgressBarCallback(Callback):
     """

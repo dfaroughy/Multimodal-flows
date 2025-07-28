@@ -206,15 +206,15 @@ class FlavorFormer(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
-                                 nn.GELU(),
-                                 nn.Linear(config.n_embd, config.n_embd)),
+                                nn.GELU(),
+                                nn.Linear(config.n_embd, config.n_embd)),
             ln1 = LayerNorm(config.n_embd),
             drop = nn.Dropout(config.dropout),
-            blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            blocks = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer)]),
             ln2 = LayerNorm(config.n_embd),
             head = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
-                                  nn.GELU(),
-                                  nn.Linear(config.n_inner, config.dim_continuous)),
+                                 nn.GELU(),
+                                 nn.Linear(config.n_inner, config.vocab_size)),
         ))
 
         if config.use_pos_emb: # Positional embeddings
@@ -235,11 +235,9 @@ class FlavorFormer(nn.Module):
         attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
         attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
 
-        tokens = state.discrete.squeeze(-1)
-
         # Initial embeddings
 
-        tok_emb = self.transformer.wte(tokens)                              # (B, D, n_embd)
+        tok_emb = self.transformer.wte(state.discrete.squeeze(-1))                              # (B, D, n_embd)
         tok_emb = self.transformer.ln1(tok_emb)
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
         time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
@@ -250,13 +248,13 @@ class FlavorFormer(nn.Module):
             tok_emb += pos_emb.view(1, self.max_num_particles , self.n_embd)
 
         if hasattr(self.transformer, 'wue'):
-            U_emb = self.token_interactions_emb(tokens)  
+            U_emb = self.token_interactions_emb(state.discrete.squeeze(-1))  
             attn_mask = attn_mask + self.lambda_u * U_emb   
             
         # transformer blocks
 
         f = self.transformer.drop(tok_emb + time_emb)
-        f_skip = f.clone()
+        f_skip = tok_emb.clone()
 
         for block in self.transformer.blocks:
             f = block(f, attn_mask=attn_mask)

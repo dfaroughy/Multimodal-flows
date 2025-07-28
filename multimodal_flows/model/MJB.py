@@ -11,6 +11,7 @@ from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import DiscreteSolver
+from networks.registry import MODEL_REGISTRY
 
 
 class MarkovJumpBridge(L.LightningModule):
@@ -19,19 +20,21 @@ class MarkovJumpBridge(L.LightningModule):
         based on continuous-time Markov jump processes
     """ 
 
-    def __init__(self, config, model: nn.Module):
-                 
+    def __init__(self, config):
         super().__init__()
 
-        self.config = config
         thermostat = ConstantThermostat(config.gamma, config.vocab_size)
-        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)        
-        self.model = model(config)
+
+        self.model = MODEL_REGISTRY[config.model](config)
+        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
+
         self.save_hyperparameters(vars(config))
+        self.config = config
+
 
     # ...Lightning functions
 
-    def forward(self, state: TensorMultiModal) -> TensorMultiModal:
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
         return self.model(state)
         
     def training_step(self, batch: DataCoupling, batch_idx):
@@ -138,9 +141,8 @@ class MarkovJumpBridge(L.LightningModule):
         state = batch.source.clone()
         
         for i, t in enumerate(time_steps):
-            is_last_step = (i == len(time_steps) - 1)
             state.time = torch.full((len(state),), t.item(), device=self.device)            
-            state = solver.fwd_step(state, delta_t, is_last_step)
+            state = solver.fwd_step(state, delta_t)
 
         batch.target = state
 
