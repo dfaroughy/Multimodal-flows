@@ -19,11 +19,11 @@ from networks.registry import MODEL_REGISTRY
 
 
 class MultiModalFlowBridge(L.LightningModule):
-    def __init__(self, config):
 
-        """ Hybrid Dynamical generative model for continuous and discrete states
-            based on continuous-time Markov jump processes and flow matching.
-        """                 
+    """ Hybrid Dynamical generative model for continuous and discrete states
+        based on continuous-time Markov jump processes and flow matching.
+    """    
+    def __init__(self, config):    
         super().__init__()
 
         thermostat = ConstantThermostat(config.gamma, config.vocab_size)
@@ -107,12 +107,10 @@ class MultiModalFlowBridge(L.LightningModule):
     # ...Model functions
 
     def loss(self, batch: DataCoupling) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+        """ Markov bridge CE loss + Flow-mathcing MSE loss
         """
-        Returns:
-        total_loss: the uncertainty-weighted sum
-        mse_mean:   the (unweighted) MSE averaged over the batch
-        ce_mean:    the (unweighted) CE averaged over the batch
-        """
+        
         B = len(batch)
         V = self.config.vocab_size
         eps = self.config.time_eps
@@ -191,14 +189,16 @@ class MultiTaskLoss(nn.Module):
 
         elif self.config.multitask_loss == "weighted":
             u1, u2 = self.loss_weights.unbind(-1)  
+            w1, w2 = torch.exp(-u1), torch.exp(-u2)
+            loss = 0.5 * (u1 + w1 * loss_1) + 0.5 * (u2 + w2 * loss_2)
+            return loss.mean(), loss_1.mean(), loss_2.mean(), w1.mean(), w2.mean() 
 
         elif self.config.multitask_loss == "time-weighted":
             t_emb = transformer_timestep_embedding(state.time, self.config.n_embd)  # (B, n_embd)
             u1, u2 = self.uncertainty_net(t_emb).unbind(-1)  # each (B,)
+            w1, w2 = torch.exp(-u1), torch.exp(-u2)
+            loss = 0.5 * (u1 + w1 * loss_1) + 0.5 * (u2 + w2 * loss_2)
+            return loss.mean(), loss_1.mean(), loss_2.mean(), w1.mean(), w2.mean() 
 
-        w1, w2 = torch.exp(-u1), torch.exp(-u2)
-        loss = 0.5 * (u1 + w1 * loss_1) + 0.5 * (u2 + w2 * loss_2)
-
-        return loss.mean(), loss_1.mean(), loss_2.mean(), w_mse.mean(), w_ce.mean() 
 
 
