@@ -12,7 +12,7 @@ from utils.tensorclass import TensorMultiModal
 from utils.aoj import AspenOpenJets 
 from utils.helpers import load_from_experiment, set_logger
 from utils.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
-from utils.callbacks import TrainLoggerCallback    
+from utils.callbacks import TrainLoggerCallback, EMACallback  
 
 
 def experiment_configs(exp_id_path=None):
@@ -49,7 +49,7 @@ def experiment_configs(exp_id_path=None):
         config.add_argument("--lr", type=float, default=1e-4)
         config.add_argument("--lr_final", type=float, default=1e-5)
         config.add_argument("--warmup_epochs", type=str, default=5)
-        
+        config.add_argument("--multitask_loss", type=str, default='sum')
         config.add_argument("--gamma", "-gam", type=float, default=0.1)
         config.add_argument("--sigma", "-sig", type=float, default=1e-5)
         config.add_argument("--loss_weight", type=float, default=1.0)        
@@ -98,7 +98,7 @@ def run_train_experiment(config, lighting_module):
     else: # new run
         model = lighting_module(config)
 
-    callback = L.callbacks.ModelCheckpoint(dirpath=None,
+    ckpt_callback = L.callbacks.ModelCheckpoint(dirpath=None,
                                            monitor="val_loss",
                                            filename="best",
                                            save_top_k=10,
@@ -106,6 +106,7 @@ def run_train_experiment(config, lighting_module):
                                            save_last=True,
                                             )
     monitor_callback = TrainLoggerCallback(config)
+    ema_callback = EMACallback(decay=0.999)
 
     logger = set_logger(config)
 
@@ -114,7 +115,10 @@ def run_train_experiment(config, lighting_module):
                         devices='auto',
                         strategy='ddp',
                         num_nodes=config.num_nodes,
-                        callbacks=[callback, monitor_callback],
+                        callbacks=[ckpt_callback, 
+                                   monitor_callback, 
+                                   ema_callback
+                                   ],
                         logger=logger,
                         sync_batchnorm=True,
                         gradient_clip_val=1.0,

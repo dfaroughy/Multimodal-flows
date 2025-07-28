@@ -5,10 +5,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
+from copy import deepcopy
 
 from pytorch_lightning.callbacks import Callback, RichProgressBar
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.utilities import rank_zero_only
+from timm.utils.model_ema import ModelEmaV2
+
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
 
@@ -117,31 +120,16 @@ class TrainLoggerCallback(Callback):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        # containers for batch‐level metrics
         self.epoch_metrics = {"train": {}, "val": {}}
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        # outputs is whatever your training_step returns
         self._track_metrics("train", outputs)
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self._track_metrics("val", outputs)
 
     def on_train_epoch_end(self, trainer, pl_module):
-        # first log the standard epoch‐averaged metrics
         self._log_epoch_metrics("train", pl_module)
-
-        # # now compute & log the average gates across all layers
-        # gxs, gys = [], []
-        # for block in pl_module.model.transformer.blocks_xy:
-        #     gxs.append(torch.tanh(block.attn_gate_x))
-        #     gys.append(torch.tanh(block.attn_gate_y))
-        # avg_gx = torch.stack(gxs).mean()
-        # avg_gy = torch.stack(gys).mean()
-
-        # # log them—will show in prog bar and any logger (TB, WandB, etc.)
-        # pl_module.log("avg_gate_x", avg_gx, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        # pl_module.log("avg_gate_y", avg_gy, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
     def on_validation_epoch_end(self, trainer, pl_module):
         self._log_epoch_metrics("val", pl_module)
@@ -163,6 +151,42 @@ class TrainLoggerCallback(Callback):
                 sync_dist=True,
             )
         self.epoch_metrics[stage].clear()
+
+
+class EMACallback(Callback):
+    def __init__(self, decay=0.9999, swap_on_val: bool = True):
+        super().__init__()
+        self.decay = decay
+        self.swap_on_val = swap_on_val
+        self.ema_model = None
+        self._backup = None
+
+    def setup(self, trainer, pl_module, stage=None):
+        # 1) find the device your model lives on
+        device = next(pl_module.model.parameters()).device  # torch.device('cuda:0'), etc.
+        # 2) build the EMA copy on *that* same device
+        self.ema_model = ModelEmaV2(
+            pl_module.model, 
+            decay=self.decay, 
+            device=str(device)       # e.g. "cuda:0"
+        )
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self.ema_model.update(pl_module.model)
+
+    def on_validation_start(self, trainer, pl_module):
+        if not self.swap_on_val:
+            return
+        self._backup = deepcopy(pl_module.model.state_dict())
+        pl_module.model.load_state_dict(self.ema_model.module.state_dict())
+
+    def on_validation_end(self, trainer, pl_module):
+        if not self.swap_on_val or self._backup is None:
+            return
+        pl_module.model.load_state_dict(self._backup)
+        self._backup = None
+
+
 
 
 class ProgressBarCallback(Callback):

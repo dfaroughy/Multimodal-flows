@@ -172,6 +172,9 @@ class MultiModalFlowBridge(L.LightningModule):
 
 class MultiTaskLoss(nn.Module):
     def __init__(self, config):
+        super().__init__()
+
+        self.config = config
 
         if self.config.multitask_loss == "weighted":
             self.loss_weights = nn.Parameter(torch.tensor([0.0, 0.0]))
