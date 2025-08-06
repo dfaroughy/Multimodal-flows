@@ -11,6 +11,7 @@ import json
 from torch.utils.data import DataLoader, Subset
 import lightning.pytorch as L
 from torch.nn import functional as F
+from torch.distributions.categorical import Categorical
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -505,9 +506,6 @@ class JetFeatures:
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
 
-
-
-
     # metrics:
 
     def Wassertein1D(self, feature, reference):
@@ -516,7 +514,6 @@ class JetFeatures:
         return scipy.stats.wasserstein_distance(x, y)
 
     # helper methods:
-
 
     def _jet_charge(self, kappa):
         """jet charge defined as Q_j^kappa = Sum_i Q_i * (pT_i / pT_jet)^kappa"""
@@ -877,3 +874,21 @@ class JetChargeDipole:
         d2 = d2[mask_2_parts]
 
         return Q0, Qkappa, d2
+
+
+def sample_from_empirical_masks(pad_masks, num_jets, max_num_particles=150, randomize_masks=False):
+    nums = pad_masks.squeeze(-1).sum(1)
+    probs, _ = np.histogram(nums.numpy(), bins=np.arange(0, max_num_particles + 2, 1), density=True)
+    probs = torch.tensor(probs, dtype=torch.float32)
+    multiplicity = Categorical(probs).sample((num_jets, ))
+    mask = torch.zeros((num_jets, max_num_particles))
+
+    for i, n in enumerate(multiplicity):
+        mask[i, :n] = 1
+        if randomize_masks:
+            idx = torch.randperm(max_num_particles)
+            mask[i] = mask[i][idx]
+
+    mask = mask.long().unsqueeze(-1)
+
+    return mask

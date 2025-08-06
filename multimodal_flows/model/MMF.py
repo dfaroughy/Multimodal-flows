@@ -15,6 +15,7 @@ from utils.datasets import DataCoupling
 from utils.thermostats import ConstantThermostat
 from model.solvers import HybridSolver
 from utils.models import MLP, transformer_timestep_embedding
+from utils.callbacks import EMACallback
 from networks.registry import MODEL_REGISTRY
 
 
@@ -32,7 +33,6 @@ class MultiModalFlowBridge(L.LightningModule):
         self.bridge_continuous = UniformFlow(config.sigma)        
         self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
         self.loss_combine = MultiTaskLoss(config)
-
         self.save_hyperparameters(vars(config))
         self.config = config
 
@@ -42,23 +42,31 @@ class MultiModalFlowBridge(L.LightningModule):
         return self.model(state)
 
     def training_step(self, batch: DataCoupling, batch_idx):
+
         loss, loss_mse, loss_ce, w_mse, w_ce = self.loss(batch)
+
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("train_loss_ce", loss_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("train_loss_mse", loss_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
+        
         if 'weighted' in self.config.multitask_loss:
             self.log("train_weight_mse", w_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
             self.log("train_weight_ce", w_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
+
         return {"loss": loss}
 
     def validation_step(self, batch: DataCoupling, batch_idx):
+
         loss, loss_mse, loss_ce, w_mse, w_ce = self.loss(batch)
+
         self.log("val_loss", loss, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("val_loss_ce", loss_ce, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
         self.log("val_loss_mse", loss_mse, on_epoch=True, prog_bar=True, logger=True, sync_dist=True, batch_size=len(batch))
+
         if 'weighted' in self.config.multitask_loss:
             self.log("val_weight_mse", w_mse, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
             self.log("val_weight_ce", w_ce, on_epoch=True, prog_bar=False, logger=True, sync_dist=True, batch_size=len(batch))
+            
         return {"val_loss": loss}
 
     def predict_step(self, batch: DataCoupling, batch_idx, dataloader_idx=0) -> TensorMultiModal:
@@ -103,6 +111,26 @@ class MultiModalFlowBridge(L.LightningModule):
             },
         }
 
+    def on_load_checkpoint(self, checkpoint: dict) -> None:
+        """ hook for loading EMA states"""
+        self.ema_state_from_ckpt = None
+        if 'callbacks' in checkpoint and 'EMACallback' in checkpoint['callbacks']:
+            print("INFO: Found EMA state in checkpoint. Caching for EMACallback.")
+            self.ema_state_from_ckpt = checkpoint['callbacks']['EMACallback']['ema_state_dict']
+
+    def on_save_checkpoint(self, checkpoint: dict) -> None:
+        """ hook for saving EMA states"""
+        ema_callback = None
+        for callback in self.trainer.callbacks:
+            if isinstance(callback, EMACallback):
+                ema_callback = callback
+                break
+        if ema_callback and ema_callback.use_ema and ema_callback.ema_model is not None:
+            if 'callbacks' not in checkpoint:
+                checkpoint['callbacks'] = {}
+            checkpoint['callbacks']['EMACallback'] = {"ema_state_dict": ema_callback.ema_model.module.state_dict()}
+        else:
+            print(f"WARNING: EMA callback not found, state not saved at epoch {self.current_epoch}.")
 
     # ...Model functions
 
@@ -140,7 +168,6 @@ class MultiModalFlowBridge(L.LightningModule):
         
         return loss
 
-
     @torch.no_grad()
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
@@ -160,12 +187,13 @@ class MultiModalFlowBridge(L.LightningModule):
         
         for i, t in enumerate(time_steps):
             state.time = torch.full((len(state),), t.item(), device=self.device)  
-            state = solver.fwd_step(state, delta_t)
+            state, rates = solver.fwd_step(state, delta_t)
 
+        # max_rate = torch.max(rates, dim=2)[1]
+        # state.discrete = max_rate.unsqueeze(-1)
         batch.target = state
 
         return batch
-
 
 
 class MultiTaskLoss(nn.Module):

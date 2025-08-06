@@ -6,11 +6,11 @@ import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
 from copy import deepcopy
-
-from pytorch_lightning.callbacks import Callback, RichProgressBar
+from timm.utils.model_ema import ModelEmaV2
+from pytorch_lightning import Callback, Trainer
+from pytorch_lightning.callbacks import RichProgressBar
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.utilities import rank_zero_only
-from timm.utils.model_ema import ModelEmaV2
 
 from utils.helpers import SimpleLogger as log
 from utils.tensorclass import TensorMultiModal
@@ -38,8 +38,9 @@ class FlowGeneratorCallback(Callback):
             self._clean_temp_files()
 
     def _save_results_local(self, rank):
+        randint = np.random.randint(0, 1000000)
         data = TensorMultiModal.cat(self.batched_data, dim=0)
-        data.save_to(f"{self.experiment_dir}/temp_data{self.tag}_{rank}.h5")
+        data.save_to(f"{self.experiment_dir}/temp_data{self.tag}_{rank}_{randint}.h5")
 
     @rank_zero_only
     def _gather_results_global(self, trainer):
@@ -152,56 +153,80 @@ class TrainLoggerCallback(Callback):
         self.epoch_metrics[stage].clear()
 
 
-
 class EMACallback(Callback):
+    """
+    Corrected EMA callback that swaps the entire module object to prevent state leakage.
+    """
     def __init__(self, config):
         super().__init__()
         self.decay = config.ema_decay
-        self.use_ema_weights = config.use_ema_weights
-        self.ema_model = None
-        self._backup = None
+        self.use_ema = config.use_ema_weights
+        self.ema_model: ModelEmaV2 | None = None
+        self.model_backup = None 
 
-    def setup(self, trainer, pl_module, stage=None):
-        device = next(pl_module.model.parameters()).device
-        self.ema_model = ModelEmaV2(pl_module.model,decay=self.decay,device=str(device))
+    def _init_ema(self, pl_module):
+        if self.ema_model is None:
+            print("INFO: Initializing EMA model.")
+            device = self._get_device_of(pl_module.model)
+            self.ema_model = ModelEmaV2(pl_module.model, decay=self.decay, device=str(device))
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        self.ema_model.update(pl_module.model)
+    def on_fit_start(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema:
+            self._init_ema(pl_module)
 
-    def on_validation_start(self, trainer, pl_module):
-        # swap EMA for validation 
-        if not self.use_ema_weights:
-            return
-        self._backup = deepcopy(pl_module.model.state_dict())
-        pl_module.model.load_state_dict(self.ema_model.module.state_dict())
+    def on_train_batch_end(self, trainer: Trainer, pl_module, outputs, batch, batch_idx) -> None:
+        if self.use_ema and self.ema_model is not None:
+            self.ema_model.update(pl_module.model)
 
-    def on_validation_end(self, trainer, pl_module):
-        # restore online weights after validation
-        if not self.use_ema_weights or self._backup is None:
-            return
-        pl_module.model.load_state_dict(self._backup)
-        self._backup = None
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema and self.ema_model is not None:
+            self.model_backup = pl_module.model
+            pl_module.model = self.ema_model.module
 
-    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
-        return {"ema_state_dict": self.ema_model.module.state_dict()}
+    def on_validation_epoch_end(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema and self.model_backup is not None:
+            pl_module.model = self.model_backup
+            self.model_backup = None
 
-    def on_load_checkpoint(self, trainer, pl_module, checkpoint):
-        device = next(pl_module.model.parameters()).device
-        self.ema_model = ModelEmaV2(pl_module.model,decay=self.decay,device=str(device))
-        if "ema_state_dict" in checkpoint:
-            self.ema_model.module.load_state_dict(checkpoint["ema_state_dict"])
+    def on_load_checkpoint(self, trainer: Trainer, pl_module, callback_state: dict) -> None:
+        if self.use_ema:
+            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
+            if cached_ema_state:
+                print("INFO: Loading EMA model weights from cached state for resuming.")
+                self._init_ema(pl_module)
+                device = self._get_device_of(pl_module.model)
+                cached_ema_state = {k: v.to(device) for k, v in cached_ema_state.items()}
+                self.ema_model.module.load_state_dict(cached_ema_state)
+            if hasattr(pl_module, 'ema_state_from_ckpt'):
+                pl_module.ema_state_from_ckpt = None
 
-    def on_predict_start(self, trainer, pl_module):
-        if self.use_ema_weights:
-            self._predict_backup = deepcopy(pl_module.model.state_dict())
-            pl_module.model.load_state_dict(self.ema_model.module.state_dict())
+    def on_predict_start(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema:
+            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
+            if not cached_ema_state:
+                print("WARNING: EMA is enabled for prediction, but no EMA state was found in the checkpoint. Using online weights.")
+                return
+            print("INFO: Prediction using EMA model object from checkpoint.")
+            self._init_ema(pl_module)
+            device = self._get_device_of(pl_module.model)
+            cached_ema_state = {k: v.to(device) for k, v in cached_ema_state.items()}
+            self.ema_model.module.load_state_dict(cached_ema_state)
+            
+            # Perform the swap for prediction
+            self.model_backup = pl_module.model
+            pl_module.model = self.ema_model.module
 
-    def on_predict_end(self, trainer, pl_module):
-        if self.use_ema_weights and hasattr(self, '_predict_backup'):
-            pl_module.model.load_state_dict(self._predict_backup)
-            del self._predict_backup
+    def on_predict_end(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema and self.model_backup is not None:
+            pl_module.model = self.model_backup
+            self.model_backup = None
 
-             
+    def _get_device_of(self, module: torch.nn.Module) -> torch.device:
+        try:
+            return next(module.parameters()).device
+        except StopIteration:
+            return torch.device("cpu") 
+
 
 class ProgressBarCallback(Callback):
     """

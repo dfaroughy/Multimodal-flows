@@ -130,6 +130,8 @@ class ConditionalFlowMatching(L.LightningModule):
 
         return loss_mse
 
+
+    @torch.no_grad()
     def simulate_dynamics(self, batch: DataCoupling) -> DataCoupling:
 
         """generate target data from source input using trained dynamics
@@ -175,11 +177,11 @@ class UniformFlow:
             batch.source.continuous = torch.randn_like(batch.target.continuous)  # (B, D, dim_continuous)
             batch.source.continuous *= batch.target.mask
 
-        x0 = batch.source.continuous  # (B, D, dim_continuous)
-        x1 = batch.target.continuous  # (B, D, vocab_size)
-        xt = t * x1 + (1.0 - t) * x0   # time-interpolated state
-        z = torch.randn_like(xt)       # noise
-        xt += self.sigma * z    # Dirac -> Gauss smear
+        x0 = batch.source.continuous    # (B, D, dim_continuous)
+        x1 = batch.target.continuous    # (B, D, vocab_size)
+        xt = t * x1 + (1.0 - t) * x0    # time-interpolated state
+        z = torch.randn_like(xt)        # noise
+        xt += self.sigma * z            # Dirac -> Gauss smear
 
         return xt
 

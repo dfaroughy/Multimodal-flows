@@ -18,8 +18,135 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-class KinFlavorFormer(nn.Module):
+class ParticleFormer(nn.Module):
 
+    def __init__(self, config):
+        super().__init__()
+
+        self.n_embd = config.n_embd
+        self.n_head = config.n_head
+        self.max_num_particles = config.max_num_particles
+        self.mu = torch.tensor(config.metadata['mean'])
+        self.sig = torch.tensor(config.metadata['std'])
+
+        self.transformer = nn.ModuleDict(dict(
+            wxe = nn.Sequential(nn.Linear(config.dim_continuous, config.n_embd), 
+                                 nn.GELU(),
+                                 nn.Linear(config.n_embd, config.n_embd // 2)),
+            wye = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd), 
+                                nn.GELU(),
+                                nn.Linear(config.n_embd, config.n_embd // 2)),                    
+            ln1_x = LayerNorm(config.n_embd // 2),
+            ln1_y = LayerNorm(config.n_embd // 2),
+            drop_x = nn.Dropout(config.dropout),
+            drop_y = nn.Dropout(config.dropout),
+            blocks_x = nn.ModuleList([SelfAttnBlock(config, config.n_embd // 2) for _ in range(config.n_layer)]),
+            blocks_y = nn.ModuleList([SelfAttnBlock(config, config.n_embd // 2) for _ in range(config.n_layer)]),
+            ln2_x = LayerNorm(config.n_embd // 2),
+            ln2_y = LayerNorm(config.n_embd // 2),
+            drop = nn.Dropout(config.dropout),
+            blocks_fuse = nn.ModuleList([SelfAttnBlock(config) for _ in range(config.n_layer_fused)]),
+            time_expand = nn.Linear(config.n_embd // 2, config.n_embd),  # time embedding expansion
+            ln3_x = LayerNorm(config.n_embd // 2),
+            ln3_y = LayerNorm(config.n_embd // 2),
+            head_x = nn.Sequential(nn.Linear(config.n_embd//2, config.n_inner),
+                                    nn.GELU(),
+                                    nn.Linear(config.n_inner, config.dim_continuous)),
+            head_y = nn.Sequential(nn.Linear(config.n_embd//2, config.n_inner),
+                                    nn.GELU(),
+                                    nn.Linear(config.n_inner, config.vocab_size)),
+        ))
+
+        if config.use_coocurrence: # Symmetric token co-ocurrence matrix U
+            self.transformer['wue'] = nn.Embedding((config.vocab_size * (config.vocab_size + 1)) // 2, config.n_embd)
+            self.transformer['wue_proj'] = nn.Linear(config.n_embd, config.n_head)
+
+        self.apply(self._init_weights)
+
+    def forward(self, state: TensorMultiModal) -> torch.Tensor:
+
+        attn_mask = state.mask.clone()
+        attn_mask = state.mask.bool().squeeze()                   # (B, D) 
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
+        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
+        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
+
+        if hasattr(self.transformer, 'wue'):
+            U_emb = self.token_co_ocurrence_emb(state.discrete.squeeze(-1))  
+            attn_mask = attn_mask + U_emb   
+
+        # Initial embeddings
+
+
+        time_emb = transformer_timestep_embedding(state.time, self.n_embd // 2)  # (B, n_embd)
+        time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
+
+        # continuous stream:
+
+        x = self.transformer.wxe(state.continuous)                      # continuous (B, D, n_embd/2)
+        x = self.transformer.ln1_x(x)                               # layer norm (B, D, n_embd/2)
+        x = self.transformer.drop_x(x + time_emb)
+        x_skip = x.clone()  # skip connection
+
+        for block in self.transformer.blocks_x:
+            x = block(x, attn_mask=attn_mask)
+            x = x + time_emb 
+
+        x = self.transformer.ln2_x(x + x_skip)
+
+        # discrete stream:
+
+        y = self.transformer.wye(state.discrete.squeeze(-1))            # discrete (B, D, n_embd/2)
+        y = self.transformer.ln1_y(y)                               # layer norm (B, D, n_embd/2)
+        y = self.transformer.drop_y(y + time_emb)
+        y_skip = y.clone()  # skip connection  
+
+        for block in self.transformer.blocks_y:
+            y = block(y, attn_mask=attn_mask)
+            y = y + time_emb 
+
+        y = self.transformer.ln2_y(y + y_skip)
+
+        # fused stream:
+
+        z = torch.cat((x, y), dim=-1)                           # joint emb (B, D, n_embd)
+        time_emb_2 = self.transformer.time_expand(time_emb)   
+        z = self.transformer.drop(z + time_emb_2)
+
+        for block in self.transformer.blocks_fuse:
+            z = block(z, attn_mask=attn_mask)
+            z = z + time_emb_2 
+            
+        # Final layer norm and heads
+
+        x, y = z.split((self.n_embd // 2, self.n_embd // 2), dim=-1)  
+        x = self.transformer.ln3_x(x + x_skip)
+        y = self.transformer.ln3_y(y + y_skip)
+
+        return self.transformer.head_x(x), self.transformer.head_y(y)  
+
+    def token_co_ocurrence_emb(self, tokens):
+        """ pairwise interactions for the tokens.
+        """
+        i, j = tokens.unsqueeze(2), tokens.unsqueeze(1)        # (B, D, 1), (B, 1, D)
+        min_tok = torch.minimum(i, j)
+        max_tok = torch.maximum(i, j)
+        U  = (max_tok * (max_tok + 1)) // 2 + min_tok          # triangle-number encoding  
+        U_emb = self.transformer.wue(U)                        # (B, D, D, n_embd)
+        U_emb = self.transformer.wue_proj(U_emb)               # (B, D, D, n_head)
+        return U_emb.permute(0, 3, 1, 2)                       # (B, n_head, D, D)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)    
+
+
+class FusedParticleFormer(nn.Module):
     def __init__(self, config):
         super().__init__()
 
@@ -61,20 +188,20 @@ class KinFlavorFormer(nn.Module):
 
         # Initial embeddings
 
-        x_emb = self.transformer.wxe(state.continuous)                      # continuous (B, D, n_embd/2)
-        x_emb = self.transformer.ln1_x(x_emb)                            # layer norm (B, D, n_embd/2)
+        x = self.transformer.wxe(state.continuous)                      # continuous (B, D, n_embd/2)
+        x = self.transformer.ln1_x(x)                            # layer norm (B, D, n_embd/2)
 
-        y_emb = self.transformer.wye(state.discrete.squeeze(-1))            # discrete (B, D, n_embd/2)
-        y_emb = self.transformer.ln1_y(y_emb)                            # layer norm (B, D, n_embd/2)
+        y = self.transformer.wye(state.discrete.squeeze(-1))            # discrete (B, D, n_embd/2)
+        y = self.transformer.ln1_y(y)                            # layer norm (B, D, n_embd/2)
 
-        z_emb = torch.cat((x_emb, y_emb), dim=-1)                           # joint emb (B, D, n_embd)
+        z = torch.cat((x, y), dim=-1)                           # joint emb (B, D, n_embd)
 
         time_emb = transformer_timestep_embedding(state.time, self.n_embd)  # (B, n_embd)
         time_emb = time_emb.unsqueeze(1)                                    # (B, 1, n_embd)
 
         # transformer blocks
 
-        z = self.transformer.drop(z_emb + time_emb)
+        z = self.transformer.drop(z + time_emb)
         z_skip = z.clone()  # skip connection for final layer norm  
 
         for block in self.transformer.blocks:
@@ -95,103 +222,6 @@ class KinFlavorFormer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)    
 
-
-class ParticleFormer(nn.Module):
-
-    def __init__(self, config):
-        """
-        config.vocab_size should include a mask token 
-        """
-        super().__init__()
-
-        self.n_embd = config.n_embd
-        self.n_head = config.n_head
-
-        self.transformer = nn.ModuleDict(dict(
-            wxe = nn.Sequential(nn.Linear(config.dim_continuous, config.n_embd),
-                                 nn.GELU(),
-                                 nn.Linear(config.n_embd, config.n_embd)),
-            wte = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd),
-                                nn.GELU(),
-                                nn.Linear(config.n_embd, config.n_embd)),
-            drop = nn.Dropout(config.dropout),
-            blocks_kin = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            blocks_flv = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            blocks_fused = nn.ModuleList([Block(config, fused=True) for _ in range(config.n_layer_fused)]),
-            ln_fused= LayerNorm(2 * config.n_embd),
-            ln_kin_last  = LayerNorm(config.n_embd),
-            ln_flv_last  = LayerNorm(config.n_embd),
-            head_kin = nn.Sequential(nn.Linear(config.n_embd, config.n_inner),
-                                     nn.GELU(),
-                                     nn.Linear(config.n_inner, config.dim_continuous)),
-            head_flv = nn.Sequential(nn.Linear(config.n_embd, config.n_inner), 
-                                      nn.GELU(),
-                                      nn.Linear(config.n_inner, config.vocab_size)) # classifier head for discrete tokens
-        ))
-
-        self.apply(self._init_weights)
-
-    def forward(self, state: TensorMultiModal) -> (torch.Tensor, torch.Tensor):
-        """
-            state.continuous is the corrupted state (B, D, 1) or (B, D, vocab_size) if onehot is True
-            state.time is the time in the corruption process (B,)
-        """
-        
-        attn_mask = state.mask.clone()
-        attn_mask = state.mask.bool().squeeze()                   # (B, D)
-        attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)           # (B, 1, 1, D)
-        attn_mask = attn_mask & attn_mask.transpose(-1, -2)       # (B, 1, D, D)
-        attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)     # (B, n_heads, D, D)
-
-        # initial embeddings
-        kin_emb = self.transformer.wxe(state.continuous)                       # feature embeddings of shape (B, D, n_embd)
-        flv_emb = self.transformer.wte(state.discrete.squeeze(-1))             # token embeddings of shape (B, D, n_embd)
-        time_emb = transformer_timestep_embedding(state.time, self.n_embd)     # time embedding of shape (B, n_embd)
-        time_emb = time_emb.unsqueeze(1)                                       # (B, 1, n_embd)
-
-        k = self.transformer.drop(kin_emb + time_emb)
-        f = self.transformer.drop(flv_emb + time_emb)
-
-        f_skip = f.clone()  # skip connection for final layer norm  
-        k_skip = k.clone()  # skip connection for final layer norm
-
-        # mode encoder blocks
-
-        for block in self.transformer.blocks_kin:
-            k = block(k, attn_mask=attn_mask)
-            k = k + time_emb 
-
-        for block in self.transformer.blocks_flv:
-            f = block(f, attn_mask=attn_mask)
-            f = f + time_emb 
-
-        h = torch.cat((k + k_skip, f + f_skip), dim=-1)  # concatenate the continuous and discrete embeddings
-        h = self.transformer.ln_fused(h)  
-
-        # fused blocks
-
-        for block in self.transformer.blocks_fused:
-            h = block(h, attn_mask=attn_mask)
-
-        k, f = h.split((self.n_embd, self.n_embd), dim=-1)  # split the concatenated embeddings back into continuous and discrete parts
-
-        k = self.transformer.ln_kin_last(k + k_skip + time_emb)  # final layer norm for continuous features
-        f = self.transformer.ln_flv_last(f + f_skip + time_emb)  # final layer norm for discrete tokens
-
-        head_kin = self.transformer.head_kin(k) # regressor head for continuous feats
-        head_flv = self.transformer.head_flv(f) # classifier head for discrete tokens
-
-        return head_kin, head_flv
-
-    def _init_weights(self, module):
-
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
 
 class FlavorFormer(nn.Module):

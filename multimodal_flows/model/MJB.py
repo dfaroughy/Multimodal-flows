@@ -142,7 +142,7 @@ class MarkovJumpBridge(L.LightningModule):
         
         for i, t in enumerate(time_steps):
             state.time = torch.full((len(state),), t.item(), device=self.device)            
-            state = solver.fwd_step(state, delta_t)
+            state, _ = solver.fwd_step(state, delta_t)
 
         batch.target = state
 

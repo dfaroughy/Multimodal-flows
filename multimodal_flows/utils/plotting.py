@@ -9,7 +9,7 @@ from typing import Union
 
 from utils.metrics import flavor_mutliplicities
 from utils.tensorclass import TensorMultiModal
-from utils.aoj import JetFeatures   
+from utils.aoj import JetFeatures, JetChargeDipole
 
 def plot_hist_and_ratio(test, 
                         gen,  
@@ -119,7 +119,6 @@ def plot_hist_and_ratio(test,
     if ylim is not None:
         ax_hist.set_ylim(*ylim)
 
-
 def plot_flavor_feats(sample: Union[TensorMultiModal, torch.Tensor], test: Union[TensorMultiModal, torch.Tensor], path=None):
     """
     Plot the flavor multiplicities of the sample and particle_set tensors.
@@ -153,6 +152,15 @@ def plot_flavor_feats(sample: Union[TensorMultiModal, torch.Tensor], test: Union
     if path: plt.savefig(path, dpi=500, bbox_inches='tight')
     else: plt.show()
 
+    return fig
+
+
+
+
+
+
+
+
 
 def plot_kin_feats(sample, test, path=None):
 
@@ -176,10 +184,10 @@ def plot_kin_feats(sample, test, path=None):
     sns.histplot(sample.constituents.phi_rel[sample.constituents.mask_bool].numpy(),  bins=bins, discrete=False, stat="density", element="step", fill=False, ax=ax[0,2], log_scale=(False, True), lw=0.75)
     ax[0,2].set_xlabel(r"$\Delta\phi$", fontsize=10)
 
-    bins = np.linspace(-1.1, 1.1, 100)
+    bins = np.linspace(1, 150, 150)
     sns.histplot(test.constituents.multiplicity.numpy(),  bins=bins, discrete=True, stat="density", element="step", fill=False, ax=ax[0,3], lw=0.75)
     sns.histplot(sample.constituents.multiplicity.numpy(),  bins=bins, discrete=True, stat="density", element="step", fill=False, ax=ax[0,3], lw=0.75)
-    ax[0,3].set_xlabel(r"$\Delta\phi$", fontsize=10)
+    ax[0,3].set_xlabel(r"$N$", fontsize=10)
 
     # jet level
 
@@ -233,6 +241,99 @@ def plot_kin_feats(sample, test, path=None):
 
     if path: plt.savefig(path, dpi=500, bbox_inches='tight')
     else: plt.show()
+
+    return fig
+
+
+
+def plot_jet_features(sample, test, path=None):
+
+    fig, axes = plt.subplots(2, 5, figsize=(12, 2.5), gridspec_kw={'height_ratios':[3,1], 'hspace': 0}, sharex='col')
+
+    plot_hist_and_ratio(test=test, 
+                        gen=sample, 
+                        gen_ref=None,
+                        ax_hist=axes[0, 0], 
+                        ax_ratio=axes[1, 0],  
+                        feat='pt', 
+                        xlim=(200, 750), 
+                        ylim=(0, 0.01),  
+                        num_bins=60, 
+                        color_test = 'k',
+                        lw=.75,
+                        xlabel= r'$p_T^J$ [GeV]', 
+                        ylabel='density', 
+                        legend1='sample', )
+
+    plot_hist_and_ratio(test=test, 
+                        gen=sample,  
+                        gen_ref=None,
+                        ax_hist=axes[0, 1], 
+                        ax_ratio=axes[1, 1],  
+                        feat='m', 
+                        xlim=(0, 200),  
+                        ylim=(0, 0.02), 
+                        num_bins=60, 
+                        color_test = 'k',
+                        lw=.75,
+                        xlabel=r'$m^J$ [GeV]')
+                        
+    plot_hist_and_ratio(test=test, 
+                        gen=sample, 
+                        gen_ref=None,
+                        ax_hist=axes[0, 2], 
+                        ax_ratio=axes[1, 2],
+                        feat='eta', 
+                        xlim=(-0.2,0.2), 
+                        ylim=(0, 40),  
+                        num_bins=60,
+                        color_test = 'k',
+                        lw=1.0, 
+                        xlabel=r'$\eta^J$')
+
+    plot_hist_and_ratio(test=test, 
+                        gen=sample, 
+                        gen_ref=None,
+                        ax_hist=axes[0, 3], 
+                        ax_ratio=axes[1, 3], 
+                        feat='phi', 
+                        xlim=(-0.01,0.01), 
+                        ylim=(0,1000),  
+                        num_bins=60,
+                        color_test = 'k',
+                        lw=1.0, 
+                        xlabel=r'$\phi^J$')
+
+
+    plot_hist_and_ratio(test=test, 
+                        gen=sample, 
+                        gen_ref=None,
+                        ax_hist=axes[0, 4], 
+                        ax_ratio=axes[1, 4], 
+                        feat='tau21', 
+                        xlim=(0,1), 
+                        ylim=(0,4),  
+                        num_bins=60,
+                        color_test = 'k',
+                        lw=1.0, 
+                        xlabel=r'$\tau_{21}$')
+
+    axes[0, 0].set_yticks([0, 0.0025,0.005, 0.0075, 0.01])
+    axes[0, 0].set_yticklabels(['', 0.0025,0.005, 0.0075, 0.01])
+    axes[0, 1].set_yticks([0,0.0025,0.0075,0.0125,0.0175])
+    axes[0, 1].set_yticklabels(['',0.005,0.001,0.015,0.02])
+    axes[0, 2].set_yticks([0,10,20,30,40])
+    axes[0, 2].set_yticklabels(['',10,20,30,40])
+    axes[0, 3].set_yticks([0,250,500,750,1000])
+    axes[0, 3].set_yticklabels(['',250,500,750,1000])
+    axes[0, 4].set_yticks([0,1,2,3,4])
+    axes[0, 4].set_yticklabels(['',1,2,3,4])
+
+    plt.tight_layout()
+
+    if path: plt.savefig(path, dpi=500, bbox_inches='tight')
+    else: plt.show()
+    return fig
 
 
 
@@ -321,3 +422,70 @@ def flavor_kinematics(sample, test, path=None):
 
     if path: plt.savefig(path, dpi=500, bbox_inches='tight')
     else: plt.show()
+
+    return fig
+
+
+def plot_charge_features(sample, test, path=None):
+    fig, axes = plt.subplots(2, 3, figsize=(12, 2.5), gridspec_kw={'height_ratios':[3,1], 'hspace': 0.0}, sharex='col')
+    num_bins=100
+
+    test_dipole = JetChargeDipole(test)           # `data` is your padded batch
+    sample_dipole = JetChargeDipole(sample)
+    _, _, test_jet_dipole =test_dipole.charge_and_dipole()
+    _, _, sample_jet_dipole = sample_dipole.charge_and_dipole()
+
+    plot_hist_and_ratio(test, 
+                        sample,
+                        gen_ref=None,
+                        ax_hist=axes[0, 0], 
+                        ax_ratio=axes[1, 0], 
+                        feat='charge',
+                        xlim=(-15,15), 
+                        ylim=(0, 0.17),
+                        color_test = 'k',
+                        lw=1.0, 
+                        num_bins=24, 
+                        discrete=True,
+                        xlabel=r'total charge $\mathcal{Q}_0$', 
+                        ylabel='density', 
+                        legend1='CFM', 
+                        legend2='MMF')
+
+    plot_hist_and_ratio(test,
+                        sample,
+                        gen_ref=None,
+                        ax_hist=axes[0, 1], 
+                        ax_ratio=axes[1, 1], 
+                        feat='jet_charge',
+                        xlim=(-1,1), 
+                        ylim=(0, 3),
+                        color_test = 'k',
+                        lw=1.0, 
+                        num_bins=num_bins, 
+                        xlabel=r'jet charge $\mathcal{Q}_1$', 
+                        )
+
+    plot_hist_and_ratio(test_jet_dipole, 
+                        sample_jet_dipole,
+                        gen_ref=None,
+                        ax_hist=axes[0, 2], 
+                        ax_ratio=axes[1, 2], 
+                        xlim=(-.01,.01), 
+                        ylim=(0, 375),
+                        color_test = 'k',
+                        lw=1.0, 
+                        num_bins=num_bins, 
+                        xlabel=r'jet dipole $d_2$',
+                        # log_scale=(False, True),
+                        )
+    # add vertical liune at x=0
+    axes[0, 0].axvline(x=0, color='k', linestyle='--', lw=0.5)
+    axes[0, 1].axvline(x=0, color='k', linestyle='--', lw=0.5)
+    axes[0, 2].axvline(x=0, color='k', linestyle='--', lw=0.5)
+
+    plt.tight_layout()
+
+    if path: plt.savefig(path, dpi=500, bbox_inches='tight')
+    else: plt.show()
+    return fig
