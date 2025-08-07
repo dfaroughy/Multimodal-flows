@@ -154,25 +154,59 @@ class TrainLoggerCallback(Callback):
 
 
 class EMACallback(Callback):
-    """
-    Corrected EMA callback that swaps the entire module object to prevent state leakage.
-    """
     def __init__(self, config):
         super().__init__()
         self.decay = config.ema_decay
         self.use_ema = config.use_ema_weights
         self.ema_model: ModelEmaV2 | None = None
-        self.model_backup = None 
-
-    def _init_ema(self, pl_module):
-        if self.ema_model is None:
-            print("INFO: Initializing EMA model.")
-            device = self._get_device_of(pl_module.model)
-            self.ema_model = ModelEmaV2(pl_module.model, decay=self.decay, device=str(device))
+        self.model_backup = None
+        self.ema_state_to_load = None 
 
     def on_fit_start(self, trainer: Trainer, pl_module) -> None:
+        """
+        Called after all setup, including device placement, is complete.
+        This is the safe place to initialize the EMA model.
+        """
         if self.use_ema:
-            self._init_ema(pl_module)
+            print("INFO: Initializing EMA model.")
+            self.ema_model = ModelEmaV2(pl_module.model, decay=self.decay)
+            target_device = self._get_device_of(pl_module.model)
+            self.ema_model.to(target_device) 
+
+            if self.ema_state_to_load:
+                print("INFO: Found state to load, resuming EMA state.")
+                self.ema_state_to_load = {k: v.to(target_device) for k, v in self.ema_state_to_load.items()}
+                self.ema_model.module.load_state_dict(self.ema_state_to_load)
+                self.ema_state_to_load = None  
+
+    def on_load_checkpoint(self, trainer: Trainer, pl_module, callback_state: dict) -> None:
+        if self.use_ema:
+            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
+            if cached_ema_state:
+                print("INFO (on_load_checkpoint): Caching EMA state to be loaded in on_fit_start.")
+                self.ema_state_to_load = cached_ema_state
+
+ 
+    def on_predict_start(self, trainer: Trainer, pl_module) -> None:
+        if self.use_ema:
+            if self.ema_model is None:
+                print("INFO Initializing EMA model for prediction.")
+                self.ema_model = ModelEmaV2(pl_module.model, decay=self.decay)
+                target_device = self._get_device_of(pl_module.model)
+                self.ema_model.to(target_device)
+            
+            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
+            if not cached_ema_state:
+                print("WARNING: EMA is enabled for prediction, but no EMA state was found.")
+                return
+            
+            print("INFO: Loading EMA state for prediction.")
+            target_device = self._get_device_of(pl_module.model)
+            cached_ema_state = {k: v.to(target_device) for k, v in cached_ema_state.items()}
+            self.ema_model.module.load_state_dict(cached_ema_state)
+            
+            self.model_backup = pl_module.model
+            pl_module.model = self.ema_model.module
 
     def on_train_batch_end(self, trainer: Trainer, pl_module, outputs, batch, batch_idx) -> None:
         if self.use_ema and self.ema_model is not None:
@@ -187,35 +221,7 @@ class EMACallback(Callback):
         if self.use_ema and self.model_backup is not None:
             pl_module.model = self.model_backup
             self.model_backup = None
-
-    def on_load_checkpoint(self, trainer: Trainer, pl_module, callback_state: dict) -> None:
-        if self.use_ema:
-            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
-            if cached_ema_state:
-                print("INFO: Loading EMA model weights from cached state for resuming.")
-                self._init_ema(pl_module)
-                device = self._get_device_of(pl_module.model)
-                cached_ema_state = {k: v.to(device) for k, v in cached_ema_state.items()}
-                self.ema_model.module.load_state_dict(cached_ema_state)
-            if hasattr(pl_module, 'ema_state_from_ckpt'):
-                pl_module.ema_state_from_ckpt = None
-
-    def on_predict_start(self, trainer: Trainer, pl_module) -> None:
-        if self.use_ema:
-            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
-            if not cached_ema_state:
-                print("WARNING: EMA is enabled for prediction, but no EMA state was found in the checkpoint. Using online weights.")
-                return
-            print("INFO: Prediction using EMA model object from checkpoint.")
-            self._init_ema(pl_module)
-            device = self._get_device_of(pl_module.model)
-            cached_ema_state = {k: v.to(device) for k, v in cached_ema_state.items()}
-            self.ema_model.module.load_state_dict(cached_ema_state)
             
-            # Perform the swap for prediction
-            self.model_backup = pl_module.model
-            pl_module.model = self.ema_model.module
-
     def on_predict_end(self, trainer: Trainer, pl_module) -> None:
         if self.use_ema and self.model_backup is not None:
             pl_module.model = self.model_backup
@@ -225,7 +231,7 @@ class EMACallback(Callback):
         try:
             return next(module.parameters()).device
         except StopIteration:
-            return torch.device("cpu") 
+            return torch.device("cpu")
 
 
 class ProgressBarCallback(Callback):
