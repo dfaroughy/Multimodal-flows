@@ -112,10 +112,13 @@ class MultiModalFlowBridge(L.LightningModule):
         }
 
     def on_load_checkpoint(self, checkpoint: dict) -> None:
-        """ hook for loading EMA states"""
+        """
+        Called by .load_from_checkpoint() in the predict script.
+        Caches the EMA state for the EMACallback to use later in on_predict_start.
+        """
         self.ema_state_from_ckpt = None
         if 'callbacks' in checkpoint and 'EMACallback' in checkpoint['callbacks']:
-            print("INFO: Found EMA state in checkpoint. Caching for EMACallback.")
+            print("INFO MultiModalFlowBridge.on_load_checkpoint: Caching EMA state for prediction.")
             self.ema_state_from_ckpt = checkpoint['callbacks']['EMACallback']['ema_state_dict']
 
     def on_save_checkpoint(self, checkpoint: dict) -> None:
@@ -189,8 +192,11 @@ class MultiModalFlowBridge(L.LightningModule):
             state.time = torch.full((len(state),), t.item(), device=self.device)  
             state, rates = solver.fwd_step(state, delta_t)
 
-        # max_rate = torch.max(rates, dim=2)[1]
-        # state.discrete = max_rate.unsqueeze(-1)
+        if self.config.use_final_max_rates:
+            print('INFO: using final max rate for discrete states')
+            max_rate = torch.max(rates, dim=2)[1]
+            state.discrete = max_rate.unsqueeze(-1)
+
         batch.target = state
 
         return batch

@@ -163,12 +163,8 @@ class EMACallback(Callback):
         self.ema_state_to_load = None 
 
     def on_fit_start(self, trainer: Trainer, pl_module) -> None:
-        """
-        Called after all setup, including device placement, is complete.
-        This is the safe place to initialize the EMA model.
-        """
         if self.use_ema:
-            print("INFO: Initializing EMA model.")
+            print("INFO: Initializing EMA model fro resuming.")
             self.ema_model = ModelEmaV2(pl_module.model, decay=self.decay)
             target_device = self._get_device_of(pl_module.model)
             self.ema_model.to(target_device) 
@@ -181,12 +177,12 @@ class EMACallback(Callback):
 
     def on_load_checkpoint(self, trainer: Trainer, pl_module, callback_state: dict) -> None:
         if self.use_ema:
-            cached_ema_state = getattr(pl_module, 'ema_state_from_ckpt', None)
-            if cached_ema_state:
-                print("INFO (on_load_checkpoint): Caching EMA state to be loaded in on_fit_start.")
-                self.ema_state_to_load = cached_ema_state
+            if callback_state and 'ema_state_dict' in callback_state:
+                print("INFO EMACallback.on_load_checkpoint: Received and cached EMA state from checkpoint.")
+                self.ema_state_to_load = callback_state['ema_state_dict']
+            else:
+                print("WARNING EMACallback.on_load_checkpoint: No EMA state found in the callback's saved state.")
 
- 
     def on_predict_start(self, trainer: Trainer, pl_module) -> None:
         if self.use_ema:
             if self.ema_model is None:
