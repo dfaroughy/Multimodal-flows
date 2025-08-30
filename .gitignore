@@ -2,7 +2,6 @@
 experiments/
 jet_sequences/
 data/
-notebooks/
 results/
 __pycache__/
 __init__.py
