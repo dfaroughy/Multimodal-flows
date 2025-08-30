@@ -432,13 +432,6 @@ def lund_observables(state, mu=1.0, sig=1.0):
     log_dR = torch.log(dR) 
     log_kt = torch.log(torch.minimum(pt_i, pt_j) * dR**2 / (pt_i * pt_j)  + 1e-8)
     lund = [log_kt, log_dR]
-    # log_z = torch.log(z + 1e-8)  
-    # log_dR = torch.log(torch.sqrt(deta ** 2 + dphi ** 2 + 1e-8)) 
-    # log_psi = torch.log(torch.abs(torch.arctan2(delta_eta, delta_phi) ) + 1e-8)  
-    # log_kt = torch.log(z * (deta ** 2 + dphi ** 2) + 1e-8)
-    # log_m2 = torch.log(2 * pt_i * pt_j * (torch.cosh(deta) - torch.cos(dphi)) + 1e-8) 
-
-    # pairwise interaction tensor (B, D, D, 2)
     U = torch.stack([log_kt, log_dR], dim=-1) 
     U = (U - U.mean(dim=-1, keepdim=True)) / (U.std(dim=-1, keepdim=True) + 1e-8)
     return U
