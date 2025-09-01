@@ -1,9 +1,6 @@
 import torch
-import torch.nn as nn
 import pytorch_lightning as L
 from torch.nn import functional as F
-from typing import List, Tuple, Dict, Union
-from torch.nn.functional import softmax
 from torch.distributions import Categorical
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -23,10 +20,10 @@ class MarkovJumpBridge(L.LightningModule):
     def __init__(self, config):
         super().__init__()
 
-        thermostat = ConstantThermostat(config.gamma, config.vocab_size)
+        thermostat = ConstantThermostat(config.beta, config.vocab_size)
 
         self.model = MODEL_REGISTRY[config.model](config)
-        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
+        self.bridge_discrete = RandomTelegraphBridge(config.beta, config.vocab_size, thermostat)   
 
         self.save_hyperparameters(vars(config))
         self.config = config
@@ -157,8 +154,8 @@ class RandomTelegraphBridge:
     - k: discrete state at time t
     """
 
-    def __init__(self, gamma, vocab_size, thermostat_fn, top_k=None):
-        self.gamma = gamma
+    def __init__(self, beta, vocab_size, thermostat_fn, top_k=None):
+        self.beta = beta
         self.vocab_size = vocab_size
         self.thermostat = thermostat_fn
         self.top_k = top_k

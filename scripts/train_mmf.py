@@ -1,12 +1,5 @@
-import torch
-import numpy as np
-import yaml
-import os
 import pytorch_lightning as L
-import matplotlib.pyplot as plt
-import argparse
 from argparse import ArgumentParser
-from pytorch_lightning.utilities import rank_zero_only
 from torch.utils.data import DataLoader, random_split
 
 from utils.aoj import AspenOpenJets 
@@ -23,52 +16,53 @@ def experiment_configs():
     # system
     config.add_argument("--num_nodes", "-N", type=int, default=1)
     config.add_argument("--dir", type=str, default='/pscratch/sd/d/dfarough')
+    config.add_argument("--dir_aoj", type=str, default='/pscratch/sd/d/dfarough/aoj')
     config.add_argument("--project", "-proj", type=str, default='jet_sequences')
     config.add_argument("--comet_workspace", type=str, default='dfaroughy')
-    config.add_argument("--comet_api_key", type=str, default='8ONjCXJ1ogsqG1UxQzKxYn7tz')
+    config.add_argument("--comet_api_key", type=str, default='8ONjCXJ1ogsqG1UxQzKxYn7')
     config.add_argument("--experiment_id", "-id", type=str, default=None)
     config.add_argument("--ckpt_path", "-ckpt", type=str, default=None)
     config.add_argument("--resume_ckpt", "-resume", type=str, default='last') 
     config.add_argument("--tags", type=str, nargs='*')
 
     # training
-    config.add_argument("--data_files", "-f", type=str, default='RunG_batch0.h5')
-    config.add_argument("--num_jets", "-n", type=int, default=None)
+    config.add_argument("--data_files", "-f", type=str, default='RunG_batch0.h5', help='aoj data file for train/val')
+    config.add_argument("--num_jets", "-n", type=int, default=1_250_000)
     config.add_argument("--max_num_particles", "-d", type=int, default=150)
     config.add_argument("--batch_size", "-bs", type=int, default=256)
-    config.add_argument("--max_epochs", "-epochs", type=int, default=250)
+    config.add_argument("--max_epochs", "-epochs", type=int, default=1500)
     config.add_argument("--train_frac", type=float, default=0.8)
     config.add_argument("--lr", type=float, default=5e-4)
     config.add_argument("--lr_final", type=float, default=1e-5)
     config.add_argument("--warmup_epochs", type=int, default=0)
-    config.add_argument("--use_ema_weights","-ema",  type=bool, default=False)
-    config.add_argument("--ema_decay", type=float, default=0.999)
+    config.add_argument("--use_ema_weights", "-ema",  type=bool, default=False)
+    config.add_argument("--ema_decay", type=float, default=0.9999)
 
     # model
-    config.add_argument("--model", "-nn", type=str, default='MultiModalParticleFormer')
+    config.add_argument("--model", "-nn", type=str, default='ParticleFormer')
     config.add_argument("--continuous_features", "-cont", type=str, nargs='*', default=['pt', 'eta_rel', 'phi_rel'])
     config.add_argument("--discrete_features", "-disc", type=str, default='tokens')
-    config.add_argument("--vocab_size", type=int, default=9, help="Number of discrete tokens (8), including a mask token (1)")
+    config.add_argument("--vocab_size", type=int, default=9, help="Number of discrete tokens (1,...,8) plus one mask token (0)")
     config.add_argument("--dim_continuous", type=int, default=3)
     config.add_argument("--n_embd", type=int, default=256)
-    config.add_argument("--n_inner", type=int, default=1024)
-    config.add_argument("--n_layer", type=int, default=2)
-    config.add_argument("--n_layer_fused", type=int, default=2)
-    config.add_argument("--n_head", type=int, default=2)
+    config.add_argument("--n_inner", type=int, default=512)
+    config.add_argument("--n_layer", type=int, default=5, help='number of layers for kin and flavor transformers')
+    config.add_argument("--n_layer_fused", type=int, default=6, help='number of layers for fused transformers')
+    config.add_argument("--n_head", type=int, default=4)
     config.add_argument("--dropout", type=float, default=0.0)
     config.add_argument("--qk_layernorm", type=bool, default=True)
     config.add_argument("--bias", type=bool, default=True)
-    config.add_argument("--multitask_loss", "-loss", type=str, default='sum')
+    config.add_argument("--multitask_loss", "-loss", type=str, default='time-weighted')
     config.add_argument("--use_coocurrence", type=bool, default=False)
     
     # dynamics
-    config.add_argument("--gamma", "-gam", type=float, default=0.1)
-    config.add_argument("--sigma", "-sig", type=float, default=1e-5)
-    config.add_argument("--time_eps", "-eps", type=float, default=1e-5)
+    config.add_argument("--beta", "-b", type=float, default=0.075, help='Markov jump bridge stochasticity hyper-parameter')
+    config.add_argument("--sigma", "-sig", type=float, default=1e-5, help='Flow-matching Gaussian smoothinig hyper-parameter')
+    config.add_argument("--time_eps", "-eps", type=float, default=1e-5, help='time endpoints regularizer')
 
     # sampling
     config.add_argument("--num_timesteps", "-steps", type=int, default=100)
-    config.add_argument("--temperature", type=float, default=1.0)
+    config.add_argument("--temperature", type=float, default=1.0, help='Temperature scaling hyperparameter for softmax')
     config.add_argument("--top_k", type=int, default=None)
     config.add_argument("--top_p", type=float, default=None)
 
@@ -88,7 +82,7 @@ def experiment_configs():
 
 def make_dataloaders(config):
 
-    aoj = AspenOpenJets(data_dir=config.dir + '/aoj', data_files=config.data_files)
+    aoj = AspenOpenJets(data_dir=config.dir_aoj, data_files=config.data_files, download=True)
 
     # target
     jets, metadata = aoj(num_jets=config.num_jets,
@@ -97,7 +91,6 @@ def make_dataloaders(config):
                         transform='standardize',
                         pt_order=True,
                         padding='zeros')
-
                
     config.metadata = metadata
 
@@ -161,7 +154,7 @@ def run_train_experiment(config, lighting_module: L.LightningModule):
         callbacks += [EMACallback(config)]
 
 
-    logger = set_logger(config)
+    logger = set_logger(config)  # comet 
 
     trainer = L.Trainer(max_epochs=config.max_epochs, 
                         accelerator='gpu', 

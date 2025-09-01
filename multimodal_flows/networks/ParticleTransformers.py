@@ -1,13 +1,9 @@
-import math
-import inspect
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
-from dataclasses import dataclass
 
 from utils.tensorclass import TensorMultiModal
 from utils.models import LayerNorm, transformer_timestep_embedding
-from networks.attention import SelfAttnBlock, TemporalGatedCrossAttnBlock
+from networks.attention import SelfAttnBlock
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -395,7 +391,7 @@ class KinFormer(nn.Module):
 
     def particle_interactions_emb(self, kin): # TODO fix
         
-        U = lund_observables(kin, self.mu, self.sig)   # (B, D, D, 2) 
+        U = lund_observables(kin, self.mu, self.sig)       # (B, D, D, 2) 
         U_emb = self.transformer.wue(U)                    # (B, D, D, n_embd)
         U_emb = 0.5 * (U_emb + U_emb.transpose(1, 2))      # symmetrize
         U_emb = self.transformer.wue_proj(U_emb)           # (B, D, D, n_head)
@@ -431,7 +427,6 @@ def lund_observables(state, mu=1.0, sig=1.0):
     dR = torch.sqrt(deta**2 + dphi**2)  # deltaR
     log_dR = torch.log(dR) 
     log_kt = torch.log(torch.minimum(pt_i, pt_j) * dR**2 / (pt_i * pt_j)  + 1e-8)
-    lund = [log_kt, log_dR]
     U = torch.stack([log_kt, log_dR], dim=-1) 
     U = (U - U.mean(dim=-1, keepdim=True)) / (U.std(dim=-1, keepdim=True) + 1e-8)
     return U

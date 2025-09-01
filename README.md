@@ -4,17 +4,11 @@ Multimodal Flow for particle cloud generation with hybrid continuous (kinematics
 
 This repo contains:
 - Training and sampling scripts powered by Pytorch Lightning
-- Experiments are monitored via Comet
 - Data utilities for AspenOpenJets (AOJ)
 - Particle transformer backbones (ParticleFormer)
 - Lightning Callbacks for logging, EMA, and generation
 
 If you’re just getting started, follow the Quickstart below.
-
-<!-- **Quickstart**
-- Clone, create an environment, install dependencies, and install the package in editable mode.
-- Download or point to AOJ data.
-- Train a model, then generate samples. -->
 
 **Installation**
 - Python: 3.10+
@@ -22,28 +16,22 @@ If you’re just getting started, follow the Quickstart below.
   - `pip install torch --index-url https://download.pytorch.org/whl/cu118`
   - `pip install -e .`
 
-<!-- Note: if PyTorch install via `requirements.txt` conflicts with your CUDA setup, install PyTorch first as shown above, then install the rest. -->
-
 ** AspenOpenJets (AOJ) dataset**
 - Default code expects AOJ `.h5` files under a base directory: `--dir <BASE>`, data in `<BASE>/aoj/RunG_batch*.h5`.
 - You can let the loader download files (uses AOJ URL) by passing `download=True` in code, or manually place files under `<BASE>/aoj/`.
 - Relevant loader: `multimodal_flows/utils/aoj.py` (`AspenOpenJets`).
 
-Example layout:
-- `<BASE>/aoj/RunG_batch0.h5`
-- `<BASE>/aoj/RunG_batch1.h5`
-
 **Training**
 - Script: `scripts/train_mmf.py`
 - Minimal example (set your experiment base dir):
-- `python scripts/train_mmf.py --dir ./experiments --project jet_sequences --data_files RunG_batch0.h5 --batch_size 256 --max_epochs 50 --model ParticleFormer`
+- `python scripts/train_mmf.py --dir ./experiments --project mmf_aoj_jets --data_files RunG_batch0.h5 --batch_size 256 --max_epochs 50 --model ParticleFormer`
 
 Key flags:
-- `--dir`: Base directory for experiments and data (expects `aoj/` under it)
-- `--project`: Project name; outputs under `<dir>/<project>/<experiment_id>`
+- `--dir`: Base directory for experiments and data (expects AOJ data dir `aoj/` under it)
+- `--project`: Comet Project name; outputs under `<dir>/<project>/<experiment_id>`
 - `--data_files`: AOJ file name(s); comma‑separated or pass multiple times
 - `--num_jets`: Optional cap on jets for quicker runs
-- `--model`: Backbone key registered in `networks/registry.py` (e.g., `ParticleFormer`, `FusedParticleFormer`, `EPiC`)
+- `--model`: Encoder key registered in `networks/registry.py` (e.g., `ParticleFormer`, `FusedParticleFormer`, `EPiC`)
 - `--use_ema_weights`: Enable EMA model weights during training/validation
 - `--multitask_loss`: `sum`, `weighted`, or `time-weighted`
 
@@ -67,16 +55,11 @@ What it does:
 - `multimodal_flows/utils/`: Datasets, tensor dataclass, callbacks, helpers, metrics, plotting
 - `notebooks/`: Analysis notebooks and figures
 
-**Tips & Common Pitfalls**
-- Install the package with `pip install -e .` so imports like `from utils...` resolve via the package mapping in `setup.py`.
-- Set your own Comet credentials or choose a different logger if you don’t use Comet. The logger persists `config.yaml` into the run directory.
-- Use GPU: set `accelerator=gpu` in the Trainer (already the default in the scripts) and ensure CUDA is visible.
-
 **Configuration**
 - The training script saves a `config.yaml` into the experiment directory. Use `--experiment_id` in subsequent runs to resume or to run inference using the saved config.
 - Important knobs:
   - Data: `continuous_features`, `discrete_features`, `max_num_particles`
-  - Dynamics: `gamma` (discrete), `sigma`, `time_eps`
+  - Dynamics: `beta` (discrete), `sigma` (continuous), `time_eps`
   - Optim: `lr`, `lr_final`, `warmup_epochs`
   - Sampling: `num_timesteps`, `temperature`, `top_k`, `top_p`
 

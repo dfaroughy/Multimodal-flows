@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 from torch.nn import functional as F
-from typing import List, Tuple, Dict, Union
-from torch.nn.functional import softmax
-from torch.distributions import Categorical
+from typing import Tuple
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from model.CFM import UniformFlow
@@ -27,11 +25,11 @@ class MultiModalFlowBridge(L.LightningModule):
     def __init__(self, config):    
         super().__init__()
 
-        thermostat = ConstantThermostat(config.gamma, config.vocab_size)
+        thermostat = ConstantThermostat(config.beta, config.vocab_size)
 
         self.model = MODEL_REGISTRY[config.model](config)
         self.bridge_continuous = UniformFlow(config.sigma)        
-        self.bridge_discrete = RandomTelegraphBridge(config.gamma, config.vocab_size, thermostat)   
+        self.bridge_discrete = RandomTelegraphBridge(config.beta, config.vocab_size, thermostat)   
         self.loss_combine = MultiTaskLoss(config)
         self.save_hyperparameters(vars(config))
         self.config = config

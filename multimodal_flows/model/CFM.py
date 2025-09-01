@@ -1,9 +1,8 @@
 import torch
-import torch.nn as nn
 import pytorch_lightning as L
 
 from torch.nn import functional as F
-from typing import List, Tuple, Dict, Union
+from typing import Union
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.tensorclass import TensorMultiModal

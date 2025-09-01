@@ -1,18 +1,15 @@
-import numpy as np
 import torch
 from argparse import ArgumentParser
 import pytorch_lightning as L
 from pytorch_lightning.utilities import rank_zero_only
-import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from utils.aoj import AspenOpenJets, JetFeatures, sample_from_empirical_masks
 from utils.datasets import MultiModalDataset, DataCoupling, data_coupling_collate_fn
 from utils.callbacks import FlowGeneratorCallback, EMACallback
-from utils.metrics import wasserstein_flavor
 from utils.plotting import plot_flavor_feats, flavor_kinematics, plot_kin_feats
 from utils.tensorclass import TensorMultiModal
-from utils.helpers import load_from_experiment, set_logger
+from utils.helpers import load_from_experiment
 
 ###############################################################################
 

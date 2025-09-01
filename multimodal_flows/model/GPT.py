@@ -1,13 +1,7 @@
-import numpy as np
 import torch
-import torch.nn as nn
 import pytorch_lightning as L
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, TensorDataset
 import torch.nn.functional as F
-from scipy.special import gammaln, gamma, factorial
-
-from utils.tensorclass import TensorMultiModal
 from utils.datasets import DataCoupling
 from transformers import GPT2Config, GPT2LMHeadModel
 

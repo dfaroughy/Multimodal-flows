@@ -2,8 +2,8 @@ import torch
 from abc import ABC, abstractmethod
 
 class Thermostat(ABC):
-    def __init__(self, gamma, vocab_size=8):
-        self.gamma = gamma
+    def __init__(self, beta, vocab_size=8):
+        self.beta = beta
         self.vocab_size = vocab_size
 
     @abstractmethod
@@ -18,7 +18,7 @@ class Thermostat(ABC):
         return self.w_ts(t, 1)
 
     def w_ts(self, t0, t1):
-        return torch.exp(-self.vocab_size * self.gamma * self._integral(t0, t1))
+        return torch.exp(-self.vocab_size * self.beta * self._integral(t0, t1))
 
 class ConstantThermostat(Thermostat):
     ''' beta(r) = const.
