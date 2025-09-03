@@ -1,15 +1,15 @@
 # Multimodal‑flows
 
-Multimodal Flow for particle cloud generation with hybrid continuous (kinematics) and discrete (particle IDs) variables. The model combines flow matching for continuous features with Markov jump dynamics for discrete features to learn realistic particle clouds from jets.
+Multimodal Flow for particle cloud generation with hybrid features. The model combines flow-matching for continuous kinematcis with Markov jump dynamics for discrete quantum numbers (charge and flavor) to learn real jets from CMS Open Data. This repository contains the code for the results in the paper 'Multimodal Generative Flows for LHC Jets'.
 
 This repo contains:
 - Self-contained MMF tutorial for 2D toy data at `/notebooks/Tutorial_Colored_8Gaussians_to_2Moons.ipynb`
 - Training and sampling scripts for AOJ are powered by Pytorch Lightning and Comet (required)
-- Data utilities for AspenOpenJets (AOJ)
+- Data utilities for `AspenOpenJets` (AOJ)
 - Particle transformers (ParticleFormer) and EPiC encoders
 - Lightning Callbacks for logging, EMA, and generation
 
-** AspenOpenJets (AOJ) dataset**
+**AspenOpenJets (AOJ) dataset**
 - Default code expects AOJ `.h5` files under a base directory: `--dir <BASE>`, data in `<BASE>/aoj/RunG_batch*.h5`.
 - You can let the loader download files (uses AOJ URL) by passing `download=True` in code, or manually place files under `<BASE>/aoj/`.
 - Relevant loader: `multimodal_flows/utils/aoj.py` (`AspenOpenJets`).
