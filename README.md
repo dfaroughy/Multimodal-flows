@@ -1,8 +1,9 @@
 # Multimodal‑flows
 
-Multimodal Flow for particle cloud generation with continuous and discrete modalities. The model combines flow-matching for particle kinematics with Markov jump dynamics for the quantum numbers (charge and flavor) to learn real jets from CMS Open Data. This repository contains the code for the results in the paper 'Multimodal Generative Flows for LHC Jets'.
+Multimodal Flow for particle cloud generation with continuous and discrete modalities. The model combines conditional flow-matching for particle kinematics with Markov jump dynamics for the quantum numbers (charge and flavor) to learn real jets from CMS Open Data. This repository contains the code for the results in the paper 'Multimodal Generative Flows for LHC Jets'.
 
 ![plot](./notebooks/trajectories.png)
+*Multimodal flow bridge evolving 8 Gaussians into 2 moons with colors. The color states are evolved with a Multivariate telegraph process.*
 
 This repo contains:
 - Self-contained MMF tutorial for 2D toy data at `/notebooks/Tutorial_Colored_8Gaussians_to_2Moons.ipynb`
