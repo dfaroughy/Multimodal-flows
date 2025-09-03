@@ -36,12 +36,8 @@ Key flags:
 - Example to generate at multiple temperatures and time steps:
 - `python scripts/sample_mmf.py --dir ./experiments --project jet_sequences --experiment_id <ID> --data_files RunG_batch1.h5 --num_jets 100000 --batch_size 256 --checkpoint best --num_timesteps 100 500 1000 --temperature 0.8 1.0 1.2 --tag demo`
 
-
 **Citations**
 - Aspen OpenJets dataset: please cite the AOJ source when using the data.
-- If you use this code in academic work, please cite this repository (bib entry TBD).
-
+  
 **License**
 - Add your license of choice (e.g., MIT) in `LICENSE`.
-
-Questions or issues? Open an issue with details about your environment, command, and logs.
