@@ -11,6 +11,38 @@ from utils.metrics import flavor_mutliplicities
 from utils.tensorclass import TensorMultiModal
 from utils.aoj import JetFeatures, JetChargeDipole
 
+
+
+def plot_trajectories(sample, timesteps=[0, 0.2, 0.4, 0.6, 0.8, 1.0], title=None, N=800, cmap='tab10', show_paths=True):
+    """ Plot trajectories of some selected samples.
+    """
+    paths = sample.continuous
+    jumps = sample.discrete
+
+    _, ax = plt.subplots(1, len(timesteps), figsize=(2.4*len(timesteps), 2.75))
+
+    for j, time in enumerate(timesteps):
+
+        idx_path = int(time * len(paths)) if time < 1 else -1 
+        vmin, vmax = jumps.min(), jumps.max()
+        
+        if show_paths:
+            for i in range(N):
+                ax[j].plot(paths[:idx_path, i, 0], paths[:idx_path, i, 1], alpha=0.3, lw=0.1, color='k')  # Plot lines for each trajectory
+
+        ax[j].scatter(paths[0, :N, 0], paths[0, :N, 1], s=1, color='gray', alpha=0.2, vmin=vmin, vmax=vmax)
+        ax[j].scatter(paths[idx_path, :N, 0], paths[idx_path, :N, 1], s=1, c=jumps[idx_path, :N], cmap=cmap, alpha=1, vmin=vmin, vmax=vmax)
+        ax[j].text(0.125, 0.95, f't={idx_path/len(paths) if time < 1 else 1:.1f}', horizontalalignment='center', verticalalignment='center', transform=ax[j].transAxes, fontsize=10)
+        ax[j].set_xlim(-1.25, 1.25)
+        ax[j].set_xticks([])
+        ax[j].set_yticks([])
+        ax[j].axis('equal')
+
+    ax[0].set_title(title, fontsize=10)
+    plt.tight_layout()
+    plt.show()
+    
+
 def plot_hist_and_ratio(test, 
                         gen,  
                         gen_ref,

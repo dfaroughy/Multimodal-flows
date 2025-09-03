@@ -8,13 +8,9 @@ import h5py
 import os
 import urllib.request
 import json
-from torch.utils.data import DataLoader, Subset
-import lightning.pytorch as L
-from torch.nn import functional as F
 from torch.distributions.categorical import Categorical
 import seaborn as sns
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from dataclasses import dataclass
 
 plt.rcParams["mathtext.fontset"] = "cm"

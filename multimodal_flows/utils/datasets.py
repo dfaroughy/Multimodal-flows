@@ -45,7 +45,7 @@ class MultiModalDataset(Dataset):
         self.data = data
         self.attribute = []
 
-        # ...source (optional)
+        # ...source
 
         if hasattr(self.data, "source"):
 
@@ -78,16 +78,6 @@ class MultiModalDataset(Dataset):
                 self.attribute.append("target_mask")
                 self.target_mask = self.data.target.mask
                 self.len = len(self.data.target)
-
-        # ...context (optional) TODO!!!
-
-        if hasattr(self.data, "context_continuous"):
-            self.attribute.append("context_continuous")
-            self.context_continuous = self.data.context_continuous
-
-        if hasattr(self.data, "context_discrete"):
-            self.attribute.append("context_discrete")
-            self.context_discrete = self.data.context_discrete
 
         self.databatch = namedtuple("databatch", self.attribute)
 
