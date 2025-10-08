@@ -15,7 +15,7 @@ This repo contains:
 **AspenOpenJets (AOJ) dataset**
 
 ![plot](./particle_clouds.png)
-*Visualizations of 10 CMS jets as particle clouds in the $(\eta,\phi)$-plane taken from the {\sc AspenOpenJets} training dataset. The size of each marker is proportional to the particle's transverse momentum, while the shape and color encode the discrete variables corresponding to electric charge and flavor, respectively.*
+*Visualizations of 10 CMS jets as particle clouds in the $(\eta,\phi)$-plane taken from the {\sc AspenOpenJets} training dataset. The size of each marker is proportional to the particle's transverse momentum, while the shape and color encode the discrete variables corresponding to electric charge and particle type, respectively.*
 
 - Default code expects AOJ `.h5` files under a base directory: `--dir <BASE>`, data in `<BASE>/aoj/RunG_batch*.h5`.
 - You can let the loader download files (uses AOJ URL) by passing `download=True` in code, or manually place files under `<BASE>/aoj/`.
