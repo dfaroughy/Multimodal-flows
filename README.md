@@ -13,6 +13,10 @@ This repo contains:
 - Lightning Callbacks for logging, EMA, and generation
 
 **AspenOpenJets (AOJ) dataset**
+
+![plot](./particle_clouds.png)
+*Visualizations of 10 CMS jets in the $(\eta,\phi)$-plane taken from the {\sc AspenOpenJets} training dataset.*
+
 - Default code expects AOJ `.h5` files under a base directory: `--dir <BASE>`, data in `<BASE>/aoj/RunG_batch*.h5`.
 - You can let the loader download files (uses AOJ URL) by passing `download=True` in code, or manually place files under `<BASE>/aoj/`.
 - Relevant loader: `multimodal_flows/utils/aoj.py` (`AspenOpenJets`).
