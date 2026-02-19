@@ -40,6 +40,13 @@ Key flags:
 - Example to generate at multiple temperatures and time steps:
 - `python scripts/sample_mmf.py --dir ./experiments --project jet_sequences --experiment_id <ID> --data_files RunG_batch1.h5 --num_jets 100000 --batch_size 256 --checkpoint best --num_timesteps 100 500 1000 --temperature 0.8 1.0 1.2 --tag demo`
 
+
+**CMS Open Data NanoAOD quick extraction (Python)**
+- Script: `scripts/extract_cms_nanoaod.py`
+- Purpose: read a NanoAOD ROOT file and export event-level features (run/lumi/event IDs, object multiplicities, MET, leading-object kinematics, and HT) to CSV or compressed NumPy (`.npz`).
+- Example (50k events):
+- `python scripts/extract_cms_nanoaod.py --input root://eospublic.cern.ch//eos/opendata/cms/<path>/NANOAOD.root --output data/cms2016_50k_events.csv --max-events 50000`
+
 **Citations**
 - Aspen OpenJets dataset: please cite the AOJ source when using the data.
   
